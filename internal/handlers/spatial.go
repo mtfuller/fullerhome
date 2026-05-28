@@ -14,39 +14,50 @@ import (
 	"github.com/mtfuller/fullerhome/internal/domain"
 )
 
-type SpatialHandler struct {
+type HomeMapHandler struct {
 	db     *database.DB
 	logger *slog.Logger
 }
 
-func NewSpatialHandler(db *database.DB, logger *slog.Logger) *SpatialHandler {
-	return &SpatialHandler{db: db, logger: logger}
+func NewHomeMapHandler(db *database.DB, logger *slog.Logger) *HomeMapHandler {
+	return &HomeMapHandler{db: db, logger: logger}
 }
 
 // Dashboard serves the root page (GET /).
-func (h *SpatialHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
+func (h *HomeMapHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	levels, err := h.queryLevels(r)
 	if err != nil {
 		h.internalError(w, "list levels", err)
 		return
 	}
-	// TODO: replace with templ component after running `task gen`
 	renderDashboard(w, levels)
 }
 
-// SpatialMap serves the interactive floor-plan view (GET /spatial).
-func (h *SpatialHandler) SpatialMap(w http.ResponseWriter, r *http.Request) {
+// HomeMap serves the interactive floor-plan editor (GET /home-map).
+func (h *HomeMapHandler) HomeMap(w http.ResponseWriter, r *http.Request) {
 	levels, err := h.queryLevels(r)
 	if err != nil {
 		h.internalError(w, "list levels", err)
 		return
 	}
-	// TODO: replace with templ component after running `task gen`
-	renderSpatialMap(w, levels)
+
+	markers, err := h.queryAllMarkers(r)
+	if err != nil {
+		h.internalError(w, "list markers", err)
+		return
+	}
+
+	rooms, err := h.queryAllRooms(r)
+	if err != nil {
+		h.internalError(w, "list rooms", err)
+		return
+	}
+
+	renderHomeMap(w, levels, markers, rooms)
 }
 
 // ListLevels handles GET /api/v1/levels.
-func (h *SpatialHandler) ListLevels(w http.ResponseWriter, r *http.Request) {
+func (h *HomeMapHandler) ListLevels(w http.ResponseWriter, r *http.Request) {
 	levels, err := h.queryLevels(r)
 	if err != nil {
 		h.internalError(w, "list levels", err)
@@ -56,26 +67,36 @@ func (h *SpatialHandler) ListLevels(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreateLevel handles POST /api/v1/levels.
-func (h *SpatialHandler) CreateLevel(w http.ResponseWriter, r *http.Request) {
+func (h *HomeMapHandler) CreateLevel(w http.ResponseWriter, r *http.Request) {
 	var req domain.CreateLevelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	level := domain.SpatialLevel{
-		ID:        uuid.New(),
-		Name:      req.Name,
-		Type:      req.Type,
-		WallsJSON: req.WallsJSON,
-		CreatedBy: req.CreatedBy,
-		UpdatedAt: time.Now(),
+	rows, err := h.db.QueryContext(r.Context(),
+		`SELECT COALESCE(MAX(order_index), -1) FROM spatial_levels`)
+	if err != nil {
+		h.internalError(w, "get max order_index", err)
+		return
 	}
-	if level.WallsJSON == "" {
-		level.WallsJSON = "[]"
+	var maxOrder int
+	for rows.Next() {
+		rows.Scan(&maxOrder)
+	}
+	rows.Close()
+
+	level := domain.HomeLevel{
+		ID:         uuid.New(),
+		Name:       req.Name,
+		Type:       req.Type,
+		OrderIndex: maxOrder + 1,
+		WallsJSON:  "[]",
+		CreatedBy:  req.CreatedBy,
+		UpdatedAt:  time.Now(),
 	}
 
-	_, err := h.db.ExecContext(r.Context(),
+	_, err = h.db.ExecContext(r.Context(),
 		`INSERT INTO spatial_levels (id, name, type, order_index, walls_json, created_by, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		level.ID.String(), level.Name, string(level.Type), level.OrderIndex,
@@ -90,8 +111,59 @@ func (h *SpatialHandler) CreateLevel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, level)
 }
 
+// UpdateLevel handles PUT /api/v1/levels/{levelID}.
+func (h *HomeMapHandler) UpdateLevel(w http.ResponseWriter, r *http.Request) {
+	levelID := chi.URLParam(r, "levelID")
+
+	var req domain.UpdateLevelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.WallsJSON == "" {
+		req.WallsJSON = "[]"
+	}
+
+	now := time.Now()
+	res, err := h.db.ExecContext(r.Context(),
+		`UPDATE spatial_levels SET name=?, type=?, walls_json=?, updated_at=? WHERE id=?`,
+		req.Name, string(req.Type), req.WallsJSON, now, levelID,
+	)
+	if err != nil {
+		h.internalError(w, "update level", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusNotFound, "level not found")
+		return
+	}
+
+	level, err := h.queryLevel(r, levelID)
+	if err != nil {
+		h.internalError(w, "fetch updated level", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, level)
+}
+
+// DeleteLevel handles DELETE /api/v1/levels/{levelID}.
+func (h *HomeMapHandler) DeleteLevel(w http.ResponseWriter, r *http.Request) {
+	levelID := chi.URLParam(r, "levelID")
+
+	res, err := h.db.ExecContext(r.Context(), `DELETE FROM spatial_levels WHERE id=?`, levelID)
+	if err != nil {
+		h.internalError(w, "delete level", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusNotFound, "level not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ListMarkers handles GET /api/v1/levels/{levelID}/markers.
-func (h *SpatialHandler) ListMarkers(w http.ResponseWriter, r *http.Request) {
+func (h *HomeMapHandler) ListMarkers(w http.ResponseWriter, r *http.Request) {
 	levelID := chi.URLParam(r, "levelID")
 
 	rows, err := h.db.QueryContext(r.Context(),
@@ -116,12 +188,11 @@ func (h *SpatialHandler) ListMarkers(w http.ResponseWriter, r *http.Request) {
 		m.LevelID = uuid.MustParse(levelIDStr)
 		markers = append(markers, m)
 	}
-
 	writeJSON(w, http.StatusOK, markers)
 }
 
 // CreateMarker handles POST /api/v1/levels/{levelID}/markers.
-func (h *SpatialHandler) CreateMarker(w http.ResponseWriter, r *http.Request) {
+func (h *HomeMapHandler) CreateMarker(w http.ResponseWriter, r *http.Request) {
 	levelID := chi.URLParam(r, "levelID")
 
 	var req domain.CreateMarkerRequest
@@ -156,23 +227,179 @@ func (h *SpatialHandler) CreateMarker(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, marker)
 }
 
+// UpdateMarker handles PUT /api/v1/levels/{levelID}/markers/{markerID}.
+func (h *HomeMapHandler) UpdateMarker(w http.ResponseWriter, r *http.Request) {
+	markerID := chi.URLParam(r, "markerID")
+
+	var req domain.UpdateMarkerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	now := time.Now()
+	res, err := h.db.ExecContext(r.Context(),
+		`UPDATE asset_markers SET label=?, category=?, x_coordinate=?, y_coordinate=?, notes=?, updated_at=? WHERE id=?`,
+		req.Label, string(req.Category), req.XCoordinate, req.YCoordinate, req.Notes, now, markerID,
+	)
+	if err != nil {
+		h.internalError(w, "update marker", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusNotFound, "marker not found")
+		return
+	}
+
+	var m domain.AssetMarker
+	var id, levelIDStr string
+	err = h.db.QueryRowContext(r.Context(),
+		`SELECT id, level_id, label, category, x_coordinate, y_coordinate, notes, updated_at FROM asset_markers WHERE id=?`,
+		markerID,
+	).Scan(&id, &levelIDStr, &m.Label, &m.Category, &m.XCoordinate, &m.YCoordinate, &m.Notes, &m.UpdatedAt)
+	if err != nil {
+		h.internalError(w, "fetch updated marker", err)
+		return
+	}
+	m.ID = uuid.MustParse(id)
+	m.LevelID = uuid.MustParse(levelIDStr)
+	writeJSON(w, http.StatusOK, m)
+}
+
+// DeleteMarker handles DELETE /api/v1/levels/{levelID}/markers/{markerID}.
+func (h *HomeMapHandler) DeleteMarker(w http.ResponseWriter, r *http.Request) {
+	markerID := chi.URLParam(r, "markerID")
+
+	res, err := h.db.ExecContext(r.Context(), `DELETE FROM asset_markers WHERE id=?`, markerID)
+	if err != nil {
+		h.internalError(w, "delete marker", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusNotFound, "marker not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListRooms handles GET /api/v1/levels/{levelID}/rooms.
+func (h *HomeMapHandler) ListRooms(w http.ResponseWriter, r *http.Request) {
+	levelID := chi.URLParam(r, "levelID")
+
+	rooms, err := h.queryRoomsForLevel(r, levelID)
+	if err != nil {
+		h.internalError(w, "list rooms", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rooms)
+}
+
+// CreateRoom handles POST /api/v1/levels/{levelID}/rooms.
+func (h *HomeMapHandler) CreateRoom(w http.ResponseWriter, r *http.Request) {
+	levelID := chi.URLParam(r, "levelID")
+
+	var req domain.CreateRoomRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	room := domain.Room{
+		ID:          uuid.New(),
+		LevelID:     uuid.MustParse(levelID),
+		Name:        req.Name,
+		XCoordinate: req.XCoordinate,
+		YCoordinate: req.YCoordinate,
+		UpdatedAt:   time.Now(),
+	}
+
+	_, err := h.db.ExecContext(r.Context(),
+		`INSERT INTO rooms (id, level_id, name, x_coordinate, y_coordinate, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		room.ID.String(), room.LevelID.String(), room.Name,
+		room.XCoordinate, room.YCoordinate, room.UpdatedAt,
+	)
+	if err != nil {
+		h.internalError(w, "create room", err)
+		return
+	}
+
+	h.logger.Info("room created", "id", room.ID, "name", room.Name)
+	writeJSON(w, http.StatusCreated, room)
+}
+
+// UpdateRoom handles PUT /api/v1/levels/{levelID}/rooms/{roomID}.
+func (h *HomeMapHandler) UpdateRoom(w http.ResponseWriter, r *http.Request) {
+	roomID := chi.URLParam(r, "roomID")
+
+	var req domain.UpdateRoomRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	now := time.Now()
+	res, err := h.db.ExecContext(r.Context(),
+		`UPDATE rooms SET name=?, x_coordinate=?, y_coordinate=?, updated_at=? WHERE id=?`,
+		req.Name, req.XCoordinate, req.YCoordinate, now, roomID,
+	)
+	if err != nil {
+		h.internalError(w, "update room", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusNotFound, "room not found")
+		return
+	}
+
+	var room domain.Room
+	var id, levelIDStr string
+	err = h.db.QueryRowContext(r.Context(),
+		`SELECT id, level_id, name, x_coordinate, y_coordinate, updated_at FROM rooms WHERE id=?`,
+		roomID,
+	).Scan(&id, &levelIDStr, &room.Name, &room.XCoordinate, &room.YCoordinate, &room.UpdatedAt)
+	if err != nil {
+		h.internalError(w, "fetch updated room", err)
+		return
+	}
+	room.ID = uuid.MustParse(id)
+	room.LevelID = uuid.MustParse(levelIDStr)
+	writeJSON(w, http.StatusOK, room)
+}
+
+// DeleteRoom handles DELETE /api/v1/levels/{levelID}/rooms/{roomID}.
+func (h *HomeMapHandler) DeleteRoom(w http.ResponseWriter, r *http.Request) {
+	roomID := chi.URLParam(r, "roomID")
+
+	res, err := h.db.ExecContext(r.Context(), `DELETE FROM rooms WHERE id=?`, roomID)
+	if err != nil {
+		h.internalError(w, "delete room", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusNotFound, "room not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- helpers ---
 
-func (h *SpatialHandler) queryLevels(r *http.Request) ([]domain.SpatialLevel, error) {
+func (h *HomeMapHandler) queryLevels(r *http.Request) ([]domain.HomeLevel, error) {
 	rows, err := h.db.QueryContext(r.Context(),
 		`SELECT id, name, type, order_index, walls_json, created_by, updated_at
 		 FROM spatial_levels ORDER BY order_index ASC`)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return []domain.SpatialLevel{}, nil
+			return []domain.HomeLevel{}, nil
 		}
 		return nil, err
 	}
 	defer rows.Close()
 
-	levels := []domain.SpatialLevel{}
+	levels := []domain.HomeLevel{}
 	for rows.Next() {
-		var l domain.SpatialLevel
+		var l domain.HomeLevel
 		var id string
 		if err := rows.Scan(&id, &l.Name, &l.Type, &l.OrderIndex, &l.WallsJSON, &l.CreatedBy, &l.UpdatedAt); err != nil {
 			return nil, err
@@ -183,7 +410,99 @@ func (h *SpatialHandler) queryLevels(r *http.Request) ([]domain.SpatialLevel, er
 	return levels, nil
 }
 
-func (h *SpatialHandler) internalError(w http.ResponseWriter, op string, err error) {
+func (h *HomeMapHandler) queryLevel(r *http.Request, levelID string) (domain.HomeLevel, error) {
+	var l domain.HomeLevel
+	var id string
+	err := h.db.QueryRowContext(r.Context(),
+		`SELECT id, name, type, order_index, walls_json, created_by, updated_at FROM spatial_levels WHERE id=?`,
+		levelID,
+	).Scan(&id, &l.Name, &l.Type, &l.OrderIndex, &l.WallsJSON, &l.CreatedBy, &l.UpdatedAt)
+	if err != nil {
+		return l, err
+	}
+	l.ID = uuid.MustParse(id)
+	return l, nil
+}
+
+func (h *HomeMapHandler) queryAllMarkers(r *http.Request) ([]domain.AssetMarker, error) {
+	rows, err := h.db.QueryContext(r.Context(),
+		`SELECT id, level_id, label, category, x_coordinate, y_coordinate, notes, updated_at FROM asset_markers`)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return []domain.AssetMarker{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	markers := []domain.AssetMarker{}
+	for rows.Next() {
+		var m domain.AssetMarker
+		var id, levelIDStr string
+		if err := rows.Scan(&id, &levelIDStr, &m.Label, &m.Category,
+			&m.XCoordinate, &m.YCoordinate, &m.Notes, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		m.ID = uuid.MustParse(id)
+		m.LevelID = uuid.MustParse(levelIDStr)
+		markers = append(markers, m)
+	}
+	return markers, nil
+}
+
+func (h *HomeMapHandler) queryAllRooms(r *http.Request) ([]domain.Room, error) {
+	rows, err := h.db.QueryContext(r.Context(),
+		`SELECT id, level_id, name, x_coordinate, y_coordinate, updated_at FROM rooms`)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return []domain.Room{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	rooms := []domain.Room{}
+	for rows.Next() {
+		var room domain.Room
+		var id, levelIDStr string
+		if err := rows.Scan(&id, &levelIDStr, &room.Name,
+			&room.XCoordinate, &room.YCoordinate, &room.UpdatedAt); err != nil {
+			return nil, err
+		}
+		room.ID = uuid.MustParse(id)
+		room.LevelID = uuid.MustParse(levelIDStr)
+		rooms = append(rooms, room)
+	}
+	return rooms, nil
+}
+
+func (h *HomeMapHandler) queryRoomsForLevel(r *http.Request, levelID string) ([]domain.Room, error) {
+	rows, err := h.db.QueryContext(r.Context(),
+		`SELECT id, level_id, name, x_coordinate, y_coordinate, updated_at FROM rooms WHERE level_id=?`, levelID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return []domain.Room{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	rooms := []domain.Room{}
+	for rows.Next() {
+		var room domain.Room
+		var id, levelIDStr string
+		if err := rows.Scan(&id, &levelIDStr, &room.Name,
+			&room.XCoordinate, &room.YCoordinate, &room.UpdatedAt); err != nil {
+			return nil, err
+		}
+		room.ID = uuid.MustParse(id)
+		room.LevelID = uuid.MustParse(levelIDStr)
+		rooms = append(rooms, room)
+	}
+	return rooms, nil
+}
+
+func (h *HomeMapHandler) internalError(w http.ResponseWriter, op string, err error) {
 	h.logger.Error("handler error", "op", op, "error", err)
 	writeError(w, http.StatusInternalServerError, "internal server error")
 }

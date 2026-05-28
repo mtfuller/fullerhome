@@ -30,17 +30,26 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	health := handlers.NewHealthHandler(db)
-	spatial := handlers.NewSpatialHandler(db, logger)
+	homeMap := handlers.NewHomeMapHandler(db, logger)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Get("/health", health.Check)
-	r.Get("/", spatial.Dashboard)
+	r.Get("/", homeMap.Dashboard)
+	r.Get("/home-map", homeMap.HomeMap)
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Get("/levels", spatial.ListLevels)
-		r.Post("/levels", spatial.CreateLevel)
-		r.Get("/levels/{levelID}/markers", spatial.ListMarkers)
-		r.Post("/levels/{levelID}/markers", spatial.CreateMarker)
+		r.Get("/levels", homeMap.ListLevels)
+		r.Post("/levels", homeMap.CreateLevel)
+		r.Put("/levels/{levelID}", homeMap.UpdateLevel)
+		r.Delete("/levels/{levelID}", homeMap.DeleteLevel)
+		r.Get("/levels/{levelID}/markers", homeMap.ListMarkers)
+		r.Post("/levels/{levelID}/markers", homeMap.CreateMarker)
+		r.Put("/levels/{levelID}/markers/{markerID}", homeMap.UpdateMarker)
+		r.Delete("/levels/{levelID}/markers/{markerID}", homeMap.DeleteMarker)
+		r.Get("/levels/{levelID}/rooms", homeMap.ListRooms)
+		r.Post("/levels/{levelID}/rooms", homeMap.CreateRoom)
+		r.Put("/levels/{levelID}/rooms/{roomID}", homeMap.UpdateRoom)
+		r.Delete("/levels/{levelID}/rooms/{roomID}", homeMap.DeleteRoom)
 	})
 
 	srv := httptest.NewServer(r)
@@ -69,7 +78,7 @@ func TestHealth(t *testing.T) {
 func TestLevels_CreateAndList(t *testing.T) {
 	srv := newTestServer(t)
 
-	body := `{"name":"Main Floor","type":"MAIN","walls_json":"[]","created_by":"test"}`
+	body := `{"name":"Ground Floor","type":"GROUND","created_by":"test"}`
 	resp, err := http.Post(srv.URL+"/api/v1/levels", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -77,8 +86,8 @@ func TestLevels_CreateAndList(t *testing.T) {
 
 	var created map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
-	assert.Equal(t, "Main Floor", created["name"])
-	assert.Equal(t, "MAIN", created["type"])
+	assert.Equal(t, "Ground Floor", created["name"])
+	assert.Equal(t, "GROUND", created["type"])
 
 	resp2, err := http.Get(srv.URL + "/api/v1/levels")
 	require.NoError(t, err)
@@ -91,11 +100,38 @@ func TestLevels_CreateAndList(t *testing.T) {
 	assert.Equal(t, created["id"], levels[0]["id"])
 }
 
+func TestLevels_UpdateAndDelete(t *testing.T) {
+	srv := newTestServer(t)
+
+	body := `{"name":"Basement","type":"BASEMENT","created_by":"test"}`
+	r1, err := http.Post(srv.URL+"/api/v1/levels", "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	var level map[string]any
+	require.NoError(t, json.NewDecoder(r1.Body).Decode(&level))
+	r1.Body.Close()
+	levelID := level["id"].(string)
+
+	// Update
+	upd := `{"name":"Basement Updated","type":"BASEMENT","walls_json":"[]"}`
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/levels/"+levelID, strings.NewReader(upd))
+	req.Header.Set("Content-Type", "application/json")
+	r2, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer r2.Body.Close()
+	assert.Equal(t, http.StatusOK, r2.StatusCode)
+
+	// Delete
+	req2, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/levels/"+levelID, nil)
+	r3, err := http.DefaultClient.Do(req2)
+	require.NoError(t, err)
+	defer r3.Body.Close()
+	assert.Equal(t, http.StatusNoContent, r3.StatusCode)
+}
+
 func TestMarkers_CreateAndList(t *testing.T) {
 	srv := newTestServer(t)
 
-	// Create a level
-	lvlBody := `{"name":"Basement","type":"BASEMENT","walls_json":"[]","created_by":"test"}`
+	lvlBody := `{"name":"Basement","type":"BASEMENT","created_by":"test"}`
 	r1, err := http.Post(srv.URL+"/api/v1/levels", "application/json", strings.NewReader(lvlBody))
 	require.NoError(t, err)
 	var level map[string]any
@@ -103,14 +139,12 @@ func TestMarkers_CreateAndList(t *testing.T) {
 	r1.Body.Close()
 	levelID := level["id"].(string)
 
-	// Create a marker
-	mBody := `{"label":"Main Breaker","category":"UTILITY","x_coordinate":42.5,"y_coordinate":18.3,"notes":"200A panel"}`
+	mBody := `{"label":"Main Breaker","category":"BREAKER","x_coordinate":42.5,"y_coordinate":18.3,"notes":"200A panel"}`
 	r2, err := http.Post(srv.URL+"/api/v1/levels/"+levelID+"/markers", "application/json", strings.NewReader(mBody))
 	require.NoError(t, err)
 	defer r2.Body.Close()
 	assert.Equal(t, http.StatusCreated, r2.StatusCode)
 
-	// List markers
 	r3, err := http.Get(srv.URL + "/api/v1/levels/" + levelID + "/markers")
 	require.NoError(t, err)
 	defer r3.Body.Close()
@@ -119,7 +153,54 @@ func TestMarkers_CreateAndList(t *testing.T) {
 	require.NoError(t, json.NewDecoder(r3.Body).Decode(&markers))
 	require.Len(t, markers, 1)
 	assert.Equal(t, "Main Breaker", markers[0]["label"])
-	assert.Equal(t, "UTILITY", markers[0]["category"])
+	assert.Equal(t, "BREAKER", markers[0]["category"])
+}
+
+func TestRooms_CreateListUpdateDelete(t *testing.T) {
+	srv := newTestServer(t)
+
+	lvlBody := `{"name":"Ground Floor","type":"GROUND","created_by":"test"}`
+	r1, err := http.Post(srv.URL+"/api/v1/levels", "application/json", strings.NewReader(lvlBody))
+	require.NoError(t, err)
+	var level map[string]any
+	require.NoError(t, json.NewDecoder(r1.Body).Decode(&level))
+	r1.Body.Close()
+	levelID := level["id"].(string)
+
+	// Create room
+	rBody := `{"name":"Kitchen","x_coordinate":30.0,"y_coordinate":40.0}`
+	r2, err := http.Post(srv.URL+"/api/v1/levels/"+levelID+"/rooms", "application/json", strings.NewReader(rBody))
+	require.NoError(t, err)
+	var room map[string]any
+	require.NoError(t, json.NewDecoder(r2.Body).Decode(&room))
+	r2.Body.Close()
+	assert.Equal(t, http.StatusCreated, r2.StatusCode)
+	assert.Equal(t, "Kitchen", room["name"])
+	roomID := room["id"].(string)
+
+	// List rooms
+	r3, err := http.Get(srv.URL + "/api/v1/levels/" + levelID + "/rooms")
+	require.NoError(t, err)
+	var rooms []map[string]any
+	require.NoError(t, json.NewDecoder(r3.Body).Decode(&rooms))
+	r3.Body.Close()
+	require.Len(t, rooms, 1)
+
+	// Update room
+	upd := `{"name":"Living Room","x_coordinate":50.0,"y_coordinate":50.0}`
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/levels/"+levelID+"/rooms/"+roomID, strings.NewReader(upd))
+	req.Header.Set("Content-Type", "application/json")
+	r4, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer r4.Body.Close()
+	assert.Equal(t, http.StatusOK, r4.StatusCode)
+
+	// Delete room
+	req2, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/levels/"+levelID+"/rooms/"+roomID, nil)
+	r5, err := http.DefaultClient.Do(req2)
+	require.NoError(t, err)
+	defer r5.Body.Close()
+	assert.Equal(t, http.StatusNoContent, r5.StatusCode)
 }
 
 func TestDashboard_ReturnsHTML(t *testing.T) {

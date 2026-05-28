@@ -51,6 +51,14 @@ func Migrate(db *DB) error {
 			notes        TEXT NOT NULL DEFAULT '',
 			updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS rooms (
+			id           TEXT PRIMARY KEY,
+			level_id     TEXT NOT NULL REFERENCES spatial_levels(id) ON DELETE CASCADE,
+			name         TEXT NOT NULL,
+			x_coordinate REAL NOT NULL DEFAULT 0,
+			y_coordinate REAL NOT NULL DEFAULT 0,
+			updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE TABLE IF NOT EXISTS sensor_telemetry (
 			id           INTEGER PRIMARY KEY AUTOINCREMENT,
 			marker_id    TEXT NOT NULL REFERENCES asset_markers(id) ON DELETE CASCADE,
