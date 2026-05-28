@@ -98,11 +98,12 @@ func renderDashboard(w http.ResponseWriter, levels []domain.HomeLevel) {
 	dashboardTmpl.Execute(w, map[string]any{"Levels": levels})
 }
 
-func renderHomeMap(w http.ResponseWriter, levels []domain.HomeLevel, markers []domain.AssetMarker, rooms []domain.Room) {
+func renderHomeMap(w http.ResponseWriter, levels []domain.HomeLevel, markers []domain.AssetMarker, rooms []domain.Room, zones []domain.Zone) {
 	stateJSON, _ := json.Marshal(map[string]any{
 		"levels":  levels,
 		"markers": markers,
 		"rooms":   rooms,
+		"zones":   zones,
 	})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	homeMapTmpl.Execute(w, map[string]any{

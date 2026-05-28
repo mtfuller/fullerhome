@@ -1,9 +1,10 @@
 import { StrictMode, useState, useCallback, useRef, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import { HomeMapCanvas, type EditMode, type Selection } from './HomeMapCanvas'
-import type { HomeLevel, AssetMarker, Room, WallSegment, MarkerCategory, HomeMapState } from './types'
+import { HomeMapCanvas, type EditMode, type Selection, type GhostLevel } from './HomeMapCanvas'
+import type { HomeLevel, AssetMarker, Room, Zone, WallSegment, MarkerCategory, ZoneType, HomeMapState, Point } from './types'
 import {
   PALETTE, LEVEL_TYPE_LABELS, MARKER_CATEGORY_LABELS, MARKER_CATEGORY_COLOURS,
+  ZONE_TYPE_LABELS, ZONE_TYPE_COLOURS,
   parseWalls, newId,
 } from './types'
 
@@ -67,13 +68,42 @@ const api = {
   async deleteRoom(levelId: string, id: string) {
     await fetch(`/api/v1/levels/${levelId}/rooms/${id}`, { method: 'DELETE' })
   },
+  async createZone(levelId: string, name: string, type: string, pointsJson: string): Promise<Zone> {
+    const r = await fetch(`/api/v1/levels/${levelId}/zones`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type, points_json: pointsJson }),
+    })
+    return r.json()
+  },
+  async updateZone(levelId: string, id: string, name: string, type: string, pointsJson: string): Promise<Zone> {
+    const r = await fetch(`/api/v1/levels/${levelId}/zones/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, type, points_json: pointsJson }),
+    })
+    return r.json()
+  },
+  async deleteZone(levelId: string, id: string) {
+    await fetch(`/api/v1/levels/${levelId}/zones/${id}`, { method: 'DELETE' })
+  },
 }
 
-// ─── Inline dialog ────────────────────────────────────────────────────────────
+// ─── Dialog ────────────────────────────────────────────────────────────────────
+
+interface SelectOption { value: string; label: string; disabled?: boolean }
+
+interface DialogField {
+  label: string
+  key: string
+  type?: 'text' | 'select'
+  value: string
+  options?: SelectOption[]
+}
 
 interface DialogProps {
   title: string
-  fields: { label: string; key: string; type?: string; value: string }[]
+  fields: DialogField[]
   onConfirm: (values: Record<string, string>) => void
   onCancel: () => void
 }
@@ -89,24 +119,36 @@ function Dialog({ title, fields, onConfirm, onCancel }: DialogProps) {
     }} onClick={e => e.target === e.currentTarget && onCancel()}>
       <div style={{
         background: '#fff', borderRadius: 8, padding: '1.5rem',
-        minWidth: 300, boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
+        minWidth: 320, boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
         fontFamily: 'sans-serif',
       }}>
         <h3 style={{ color: PALETTE.sage, marginBottom: '1rem', fontFamily: 'Georgia, serif' }}>{title}</h3>
         {fields.map(f => (
           <div key={f.key} style={{ marginBottom: '0.75rem' }}>
             <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>{f.label}</label>
-            <input
-              type={f.type ?? 'text'}
-              value={vals[f.key]}
-              autoFocus={f === fields[0]}
-              onChange={e => setVals(v => ({ ...v, [f.key]: e.target.value }))}
-              onKeyDown={e => e.key === 'Enter' && onConfirm(vals)}
-              style={{
-                width: '100%', padding: '0.4rem 0.6rem', border: `1px solid ${PALETTE.border}`,
-                borderRadius: 4, fontSize: 14, outline: 'none',
-              }}
-            />
+            {f.type === 'select' ? (
+              <select
+                value={vals[f.key]}
+                onChange={e => setVals(v => ({ ...v, [f.key]: e.target.value }))}
+                style={{ width: '100%', padding: '0.4rem 0.6rem', border: `1px solid ${PALETTE.border}`, borderRadius: 4, fontSize: 14, outline: 'none', fontFamily: 'sans-serif' }}
+              >
+                {f.options?.map(opt => (
+                  <option key={opt.value} value={opt.value} disabled={opt.disabled}>{opt.label}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={vals[f.key]}
+                autoFocus={f === fields[0]}
+                onChange={e => setVals(v => ({ ...v, [f.key]: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && onConfirm(vals)}
+                style={{
+                  width: '100%', padding: '0.4rem 0.6rem', border: `1px solid ${PALETTE.border}`,
+                  borderRadius: 4, fontSize: 14, outline: 'none',
+                }}
+              />
+            )}
           </div>
         ))}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: '1rem' }}>
@@ -131,17 +173,30 @@ function btnStyle(variant: 'primary' | 'ghost' | 'danger' | 'tool' | 'tool-activ
   return base
 }
 
+// ─── Level type options (enforces single ground floor) ────────────────────────
+
+const ALL_LEVEL_TYPES = Object.keys(LEVEL_TYPE_LABELS) as (keyof typeof LEVEL_TYPE_LABELS)[]
+
+function levelTypeOptions(existingLevels: HomeLevel[], excludeLevelId?: string): SelectOption[] {
+  const hasGround = existingLevels.some(l => l.type === 'GROUND' && l.id !== excludeLevelId)
+  return ALL_LEVEL_TYPES.map(t => ({
+    value: t,
+    label: LEVEL_TYPE_LABELS[t],
+    disabled: t === 'GROUND' && hasGround,
+  }))
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
-type LevelState = { walls: WallSegment[]; markers: AssetMarker[]; rooms: Room[] }
+type LevelState = { walls: WallSegment[]; markers: AssetMarker[]; rooms: Room[]; zones: Zone[] }
 
 function App({ initialState }: { initialState: HomeMapState }) {
   const [levels, setLevels] = useState<HomeLevel[]>(initialState.levels)
   const [activeLevelId, setActiveLevelId] = useState<string | null>(initialState.levels[0]?.id ?? null)
 
-  // Per-level data indexed by level id
   const [allMarkers, setAllMarkers] = useState<AssetMarker[]>(initialState.markers ?? [])
   const [allRooms, setAllRooms] = useState<Room[]>(initialState.rooms ?? [])
+  const [allZones, setAllZones] = useState<Zone[]>(initialState.zones ?? [])
   const [allWalls, setAllWalls] = useState<Record<string, WallSegment[]>>(() => {
     const m: Record<string, WallSegment[]> = {}
     for (const lvl of initialState.levels) m[lvl.id] = parseWalls(lvl.walls_json)
@@ -152,12 +207,23 @@ function App({ initialState }: { initialState: HomeMapState }) {
   const walls = activeLevelId ? (allWalls[activeLevelId] ?? []) : []
   const markers = allMarkers.filter(m => m.level_id === activeLevelId)
   const rooms = allRooms.filter(r => r.level_id === activeLevelId)
+  const zones = allZones.filter(z => z.level_id === activeLevelId)
+
+  // Ghost levels: all other levels' data
+  const ghostLevels: GhostLevel[] = levels
+    .filter(l => l.id !== activeLevelId)
+    .map(l => ({
+      walls: allWalls[l.id] ?? [],
+      markers: allMarkers.filter(m => m.level_id === l.id),
+      rooms: allRooms.filter(r => r.level_id === l.id),
+      zones: allZones.filter(z => z.level_id === l.id),
+    }))
 
   // Undo/redo
   const [history, setHistory] = useState<LevelState[]>([])
   const [future, setFuture] = useState<LevelState[]>([])
 
-  function snapshot(): LevelState { return { walls: [...walls], markers: [...markers], rooms: [...rooms] } }
+  function snapshot(): LevelState { return { walls: [...walls], markers: [...markers], rooms: [...rooms], zones: [...zones] } }
 
   function pushHistory() {
     setHistory(h => [...h.slice(-29), snapshot()])
@@ -167,11 +233,13 @@ function App({ initialState }: { initialState: HomeMapState }) {
   // Edit state
   const [mode, setMode] = useState<EditMode>('select')
   const [selectedCategory, setSelectedCategory] = useState<MarkerCategory>('OUTLET')
+  const [selectedZoneType, setSelectedZoneType] = useState<ZoneType>('GRASS')
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
 
   // Dialogs
   const [markerDialog, setMarkerDialog] = useState<{ x: number; y: number } | null>(null)
   const [roomDialog, setRoomDialog] = useState<{ x: number; y: number } | null>(null)
+  const [zoneDialog, setZoneDialog] = useState<{ points: Point[]; type: ZoneType } | null>(null)
   const [addLevelDialog, setAddLevelDialog] = useState(false)
   const [renameLevelDialog, setRenameLevelDialog] = useState(false)
 
@@ -219,8 +287,6 @@ function App({ initialState }: { initialState: HomeMapState }) {
 
   const handleMarkerDelete = useCallback((id: string) => {
     if (!activeLevelId) return
-    const marker = allMarkers.find(m => m.id === id)
-    if (!marker) return
     pushHistory()
     setAllMarkers(prev => prev.filter(m => m.id !== id))
     api.deleteMarker(activeLevelId, id).catch(() => setSaveError('Delete failed'))
@@ -252,7 +318,30 @@ function App({ initialState }: { initialState: HomeMapState }) {
     api.deleteRoom(activeLevelId, id).catch(() => setSaveError('Delete failed'))
   }, [activeLevelId])
 
-  // Save marker moves on mouse-up (debounce handled by the drag end)
+  // Zone mutations
+  const handleZoneCreate = useCallback((points: Point[], type: ZoneType, name: string) => {
+    if (!activeLevelId) return
+    if (name === '') {
+      // Show dialog to name the zone
+      setZoneDialog({ points, type })
+      setMode('select')
+      return
+    }
+    const pointsJson = JSON.stringify(points)
+    api.createZone(activeLevelId, name, type, pointsJson)
+      .then(z => setAllZones(prev => [...prev, z]))
+      .catch(() => setSaveError('Save failed'))
+  }, [activeLevelId])
+
+  const handleZoneDelete = useCallback((id: string) => {
+    if (!activeLevelId) return
+    const zone = allZones.find(z => z.id === id)
+    if (!zone) return
+    setAllZones(prev => prev.filter(z => z.id !== id))
+    api.deleteZone(activeLevelId, id).catch(() => setSaveError('Delete failed'))
+  }, [activeLevelId, allZones])
+
+  // Save marker/room moves on mouse-up
   useEffect(() => {
     const up = (_e: MouseEvent) => {
       if (!activeLevelId) return
@@ -281,6 +370,7 @@ function App({ initialState }: { initialState: HomeMapState }) {
     setAllWalls(w => ({ ...w, [activeLevelId]: prev.walls }))
     setAllMarkers(ms => [...ms.filter(m => m.level_id !== activeLevelId), ...prev.markers])
     setAllRooms(rs => [...rs.filter(r => r.level_id !== activeLevelId), ...prev.rooms])
+    setAllZones(zs => [...zs.filter(z => z.level_id !== activeLevelId), ...prev.zones])
     scheduleAutoSave()
   }
 
@@ -292,6 +382,7 @@ function App({ initialState }: { initialState: HomeMapState }) {
     setAllWalls(w => ({ ...w, [activeLevelId]: next.walls }))
     setAllMarkers(ms => [...ms.filter(m => m.level_id !== activeLevelId), ...next.markers])
     setAllRooms(rs => [...rs.filter(r => r.level_id !== activeLevelId), ...next.rooms])
+    setAllZones(zs => [...zs.filter(z => z.level_id !== activeLevelId), ...next.zones])
     scheduleAutoSave()
   }
 
@@ -308,14 +399,15 @@ function App({ initialState }: { initialState: HomeMapState }) {
       if (e.key === 'd') setMode('draw')
       if (e.key === 'r') setMode('room')
       if (e.key === 'm') setMode('marker')
+      if (e.key === 'z' && !e.ctrlKey && !e.metaKey) setMode('zone')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, []) // eslint-disable-line
 
-  // Selection-based property edits
   const selectedMarker = selection.kind === 'marker' ? allMarkers.find(m => m.id === selection.markerId) ?? null : null
   const selectedRoom = selection.kind === 'room' ? allRooms.find(r => r.id === selection.roomId) ?? null : null
+  const selectedZone = selection.kind === 'zone' ? allZones.find(z => z.id === selection.zoneId) ?? null : null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: PALETTE.bg }}>
@@ -323,10 +415,16 @@ function App({ initialState }: { initialState: HomeMapState }) {
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6, padding: '0 1rem',
         height: 44, background: '#fff', borderBottom: `1px solid ${PALETTE.border}`,
-        flexShrink: 0,
+        flexShrink: 0, flexWrap: 'wrap',
       }}>
         <span style={{ fontFamily: 'sans-serif', fontSize: 11, color: '#999', marginRight: 4 }}>MODE</span>
-        {([['select', 'Select (S)'], ['draw', 'Draw Walls (D)'], ['room', 'Room Label (R)'], ['marker', 'Place Marker (M)']] as [EditMode, string][]).map(([m, label]) => (
+        {([
+          ['select', 'Select (S)'],
+          ['draw', 'Draw Walls (D)'],
+          ['zone', 'Draw Zone (Z)'],
+          ['room', 'Room Label (R)'],
+          ['marker', 'Place Marker (M)'],
+        ] as [EditMode, string][]).map(([m, label]) => (
           <button key={m} onClick={() => setMode(m)} title={label} style={btnStyle(mode === m ? 'tool-active' : 'tool')}>
             {label.split(' (')[0]}
           </button>
@@ -348,8 +446,27 @@ function App({ initialState }: { initialState: HomeMapState }) {
           </>
         )}
 
+        {mode === 'zone' && (
+          <>
+            <div style={{ width: 1, height: 24, background: PALETTE.border, margin: '0 4px' }} />
+            <span style={{ fontFamily: 'sans-serif', fontSize: 11, color: '#999' }}>ZONE</span>
+            <select
+              value={selectedZoneType}
+              onChange={e => setSelectedZoneType(e.target.value as ZoneType)}
+              style={{ fontSize: 12, padding: '0.2rem 0.4rem', border: `1px solid ${PALETTE.border}`, borderRadius: 4, fontFamily: 'sans-serif' }}
+            >
+              {(Object.keys(ZONE_TYPE_LABELS) as ZoneType[]).map(z => (
+                <option key={z} value={z} style={{ color: ZONE_TYPE_COLOURS[z] }}>{ZONE_TYPE_LABELS[z]}</option>
+              ))}
+            </select>
+            <div style={{ width: 14, height: 14, borderRadius: 3, background: ZONE_TYPE_COLOURS[selectedZoneType] }} />
+          </>
+        )}
+
         <div style={{ flex: 1 }} />
 
+        <span style={{ fontFamily: 'sans-serif', fontSize: 10, color: '#bbb' }}>Scroll=zoom · Space+drag=pan · 0=reset</span>
+        <div style={{ width: 1, height: 24, background: PALETTE.border, margin: '0 4px' }} />
         <button onClick={undo} disabled={history.length === 0} title="Undo (Ctrl+Z)" style={btnStyle('ghost')}>↩ Undo</button>
         <button onClick={redo} disabled={future.length === 0} title="Redo (Ctrl+Y)" style={btnStyle('ghost')}>↪ Redo</button>
         <div style={{ width: 1, height: 24, background: PALETTE.border, margin: '0 4px' }} />
@@ -359,7 +476,7 @@ function App({ initialState }: { initialState: HomeMapState }) {
         {saveError && <span style={{ color: '#dc2626', fontSize: 12, fontFamily: 'sans-serif' }}>{saveError}</span>}
       </div>
 
-      {/* Body: levels panel + canvas + properties panel */}
+      {/* Body */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* Levels Panel */}
         <aside style={{
@@ -391,16 +508,17 @@ function App({ initialState }: { initialState: HomeMapState }) {
             <button onClick={() => setAddLevelDialog(true)} style={{ ...btnStyle('primary'), width: '100%', textAlign: 'center' }}>+ Add Level</button>
             {activeLevel && (
               <>
-                <button onClick={() => setRenameLevelDialog(true)} style={{ ...btnStyle('ghost'), width: '100%', textAlign: 'center' }}>Rename</button>
+                <button onClick={() => setRenameLevelDialog(true)} style={{ ...btnStyle('ghost'), width: '100%', textAlign: 'center' }}>Edit Level</button>
                 <button
                   onClick={async () => {
-                    if (!confirm(`Delete "${activeLevel.name}"? All walls, markers, and rooms will be lost.`)) return
+                    if (!confirm(`Delete "${activeLevel.name}"? All walls, markers, rooms, and zones will be lost.`)) return
                     await api.deleteLevel(activeLevelId!)
                     const remaining = levels.filter(l => l.id !== activeLevelId)
                     setLevels(remaining)
                     setAllWalls(w => { const n = { ...w }; delete n[activeLevelId!]; return n })
                     setAllMarkers(ms => ms.filter(m => m.level_id !== activeLevelId))
                     setAllRooms(rs => rs.filter(r => r.level_id !== activeLevelId))
+                    setAllZones(zs => zs.filter(z => z.level_id !== activeLevelId))
                     setActiveLevelId(remaining[0]?.id ?? null)
                   }}
                   style={{ ...btnStyle('danger'), width: '100%', textAlign: 'center' }}
@@ -420,8 +538,11 @@ function App({ initialState }: { initialState: HomeMapState }) {
               walls={walls}
               markers={markers}
               rooms={rooms}
+              zones={zones}
+              ghostLevels={ghostLevels}
               mode={mode}
               selectedCategory={selectedCategory}
+              selectedZoneType={selectedZoneType}
               onWallsChange={handleWallsChange}
               onMarkerPlace={handleMarkerPlace}
               onMarkerMove={handleMarkerMove}
@@ -429,6 +550,8 @@ function App({ initialState }: { initialState: HomeMapState }) {
               onRoomPlace={handleRoomPlace}
               onRoomMove={handleRoomMove}
               onRoomDelete={handleRoomDelete}
+              onZoneCreate={handleZoneCreate}
+              onZoneDelete={handleZoneDelete}
               selection={selection}
               onSelectionChange={setSelection}
             />
@@ -449,6 +572,7 @@ function App({ initialState }: { initialState: HomeMapState }) {
           }}>
             {mode === 'select' && 'Click to select · Drag to move · Delete to remove'}
             {mode === 'draw' && 'Click to place vertices · Double-click to finish · Esc to cancel'}
+            {mode === 'zone' && `Click to place zone vertices · Double-click to finish (≥3 pts) · Esc to cancel`}
             {mode === 'room' && 'Click to place a room label'}
             {mode === 'marker' && `Click to place ${MARKER_CATEGORY_LABELS[selectedCategory]} marker`}
           </div>
@@ -504,6 +628,16 @@ function App({ initialState }: { initialState: HomeMapState }) {
                 onDelete={() => handleRoomDelete(selectedRoom.id)}
               />
             )}
+            {selectedZone && activeLevelId && (
+              <ZoneProps
+                zone={selectedZone}
+                onUpdate={async (name, type) => {
+                  const updated = await api.updateZone(activeLevelId, selectedZone.id, name, type, selectedZone.points_json)
+                  setAllZones(zs => zs.map(z => z.id === updated.id ? updated : z))
+                }}
+                onDelete={() => { handleZoneDelete(selectedZone.id); setSelection({ kind: 'none' }) }}
+              />
+            )}
           </div>
         </aside>
       </div>
@@ -514,7 +648,10 @@ function App({ initialState }: { initialState: HomeMapState }) {
           title="Add Level"
           fields={[
             { label: 'Name', key: 'name', value: '' },
-            { label: 'Type', key: 'type', value: 'GROUND' },
+            {
+              label: 'Type', key: 'type', type: 'select', value: 'GROUND',
+              options: levelTypeOptions(levels),
+            },
           ]}
           onConfirm={async vals => {
             setAddLevelDialog(false)
@@ -528,10 +665,13 @@ function App({ initialState }: { initialState: HomeMapState }) {
       )}
       {renameLevelDialog && activeLevel && (
         <Dialog
-          title="Rename Level"
+          title="Edit Level"
           fields={[
             { label: 'Name', key: 'name', value: activeLevel.name },
-            { label: 'Type', key: 'type', value: activeLevel.type },
+            {
+              label: 'Type', key: 'type', type: 'select', value: activeLevel.type,
+              options: levelTypeOptions(levels, activeLevelId!),
+            },
           ]}
           onConfirm={async vals => {
             setRenameLevelDialog(false)
@@ -568,6 +708,22 @@ function App({ initialState }: { initialState: HomeMapState }) {
             setAllRooms(prev => [...prev, r])
           }}
           onCancel={() => setRoomDialog(null)}
+        />
+      )}
+      {zoneDialog && activeLevelId && (
+        <Dialog
+          title="Name This Zone"
+          fields={[
+            { label: 'Zone Name (optional)', key: 'name', value: ZONE_TYPE_LABELS[zoneDialog.type] },
+          ]}
+          onConfirm={async vals => {
+            const d = zoneDialog
+            setZoneDialog(null)
+            const pointsJson = JSON.stringify(d.points)
+            const z = await api.createZone(activeLevelId, vals.name || ZONE_TYPE_LABELS[d.type], d.type, pointsJson)
+            setAllZones(prev => [...prev, z])
+          }}
+          onCancel={() => setZoneDialog(null)}
         />
       )}
     </div>
@@ -671,6 +827,37 @@ function RoomProps({ room, onUpdate, onDelete }: {
   )
 }
 
+function ZoneProps({ zone, onUpdate, onDelete }: {
+  zone: Zone
+  onUpdate: (name: string, type: string) => void
+  onDelete: () => void
+}) {
+  const [name, setName] = useState(zone.name)
+  const [type, setType] = useState<ZoneType>(zone.type)
+  useEffect(() => { setName(zone.name); setType(zone.type) }, [zone.id])
+  const colour = ZONE_TYPE_COLOURS[type]
+  return (
+    <div style={{ fontFamily: 'sans-serif', fontSize: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+        <div style={{ width: 16, height: 16, background: colour, borderRadius: 3 }} />
+        <span style={{ fontWeight: 600, color: PALETTE.text }}>{ZONE_TYPE_LABELS[zone.type]}</span>
+      </div>
+      <PropLabel>Name</PropLabel>
+      <input value={name} onChange={e => setName(e.target.value)} style={inputStyle} />
+      <PropLabel>Zone Type</PropLabel>
+      <select value={type} onChange={e => setType(e.target.value as ZoneType)} style={inputStyle}>
+        {(Object.keys(ZONE_TYPE_LABELS) as ZoneType[]).map(z => (
+          <option key={z} value={z}>{ZONE_TYPE_LABELS[z]}</option>
+        ))}
+      </select>
+      <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+        <button onClick={() => onUpdate(name, type)} style={btnStyle('primary')}>Save</button>
+        <button onClick={onDelete} style={btnStyle('danger')}>Delete</button>
+      </div>
+    </div>
+  )
+}
+
 function PropLabel({ children }: { children: React.ReactNode }) {
   return <label style={{ display: 'block', fontSize: 11, color: '#888', marginBottom: 3, marginTop: 8 }}>{children}</label>
 }
@@ -696,15 +883,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const root = document.getElementById('home-map-root')
   if (!root) return
 
-  let initialState: HomeMapState = { levels: [], markers: [], rooms: [] }
+  let initialState: HomeMapState = { levels: [], markers: [], rooms: [], zones: [] }
   const raw = root.dataset.state
   if (raw) {
     try { initialState = JSON.parse(raw) } catch (e) { console.error('FullerHome: failed to parse state', e) }
   }
 
-  // Ensure arrays are always present
   initialState.markers ??= []
   initialState.rooms ??= []
+  initialState.zones ??= []
 
   createRoot(root).render(
     <StrictMode>
@@ -713,5 +900,4 @@ document.addEventListener('DOMContentLoaded', () => {
   )
 })
 
-// Keep old canvas root name working for backward compat
 void newId

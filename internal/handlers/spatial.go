@@ -53,7 +53,13 @@ func (h *HomeMapHandler) HomeMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderHomeMap(w, levels, markers, rooms)
+	zones, err := h.queryAllZones(r)
+	if err != nil {
+		h.internalError(w, "list zones", err)
+		return
+	}
+
+	renderHomeMap(w, levels, markers, rooms, zones)
 }
 
 // ListLevels handles GET /api/v1/levels.
@@ -383,6 +389,111 @@ func (h *HomeMapHandler) DeleteRoom(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ListZones handles GET /api/v1/levels/{levelID}/zones.
+func (h *HomeMapHandler) ListZones(w http.ResponseWriter, r *http.Request) {
+	levelID := chi.URLParam(r, "levelID")
+	zones, err := h.queryZonesForLevel(r, levelID)
+	if err != nil {
+		h.internalError(w, "list zones", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, zones)
+}
+
+// CreateZone handles POST /api/v1/levels/{levelID}/zones.
+func (h *HomeMapHandler) CreateZone(w http.ResponseWriter, r *http.Request) {
+	levelID := chi.URLParam(r, "levelID")
+
+	var req domain.CreateZoneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.PointsJSON == "" {
+		req.PointsJSON = "[]"
+	}
+
+	zone := domain.Zone{
+		ID:         uuid.New(),
+		LevelID:    uuid.MustParse(levelID),
+		Name:       req.Name,
+		Type:       req.Type,
+		PointsJSON: req.PointsJSON,
+		UpdatedAt:  time.Now(),
+	}
+
+	_, err := h.db.ExecContext(r.Context(),
+		`INSERT INTO spatial_zones (id, level_id, name, type, points_json, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		zone.ID.String(), zone.LevelID.String(), zone.Name, string(zone.Type), zone.PointsJSON, zone.UpdatedAt,
+	)
+	if err != nil {
+		h.internalError(w, "create zone", err)
+		return
+	}
+
+	h.logger.Info("zone created", "id", zone.ID, "type", zone.Type)
+	writeJSON(w, http.StatusCreated, zone)
+}
+
+// UpdateZone handles PUT /api/v1/levels/{levelID}/zones/{zoneID}.
+func (h *HomeMapHandler) UpdateZone(w http.ResponseWriter, r *http.Request) {
+	zoneID := chi.URLParam(r, "zoneID")
+
+	var req domain.UpdateZoneRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.PointsJSON == "" {
+		req.PointsJSON = "[]"
+	}
+
+	now := time.Now()
+	res, err := h.db.ExecContext(r.Context(),
+		`UPDATE spatial_zones SET name=?, type=?, points_json=?, updated_at=? WHERE id=?`,
+		req.Name, string(req.Type), req.PointsJSON, now, zoneID,
+	)
+	if err != nil {
+		h.internalError(w, "update zone", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusNotFound, "zone not found")
+		return
+	}
+
+	var z domain.Zone
+	var id, levelIDStr string
+	err = h.db.QueryRowContext(r.Context(),
+		`SELECT id, level_id, name, type, points_json, updated_at FROM spatial_zones WHERE id=?`,
+		zoneID,
+	).Scan(&id, &levelIDStr, &z.Name, &z.Type, &z.PointsJSON, &z.UpdatedAt)
+	if err != nil {
+		h.internalError(w, "fetch updated zone", err)
+		return
+	}
+	z.ID = uuid.MustParse(id)
+	z.LevelID = uuid.MustParse(levelIDStr)
+	writeJSON(w, http.StatusOK, z)
+}
+
+// DeleteZone handles DELETE /api/v1/levels/{levelID}/zones/{zoneID}.
+func (h *HomeMapHandler) DeleteZone(w http.ResponseWriter, r *http.Request) {
+	zoneID := chi.URLParam(r, "zoneID")
+
+	res, err := h.db.ExecContext(r.Context(), `DELETE FROM spatial_zones WHERE id=?`, zoneID)
+	if err != nil {
+		h.internalError(w, "delete zone", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusNotFound, "zone not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- helpers ---
 
 func (h *HomeMapHandler) queryLevels(r *http.Request) ([]domain.HomeLevel, error) {
@@ -500,6 +611,56 @@ func (h *HomeMapHandler) queryRoomsForLevel(r *http.Request, levelID string) ([]
 		rooms = append(rooms, room)
 	}
 	return rooms, nil
+}
+
+func (h *HomeMapHandler) queryAllZones(r *http.Request) ([]domain.Zone, error) {
+	rows, err := h.db.QueryContext(r.Context(),
+		`SELECT id, level_id, name, type, points_json, updated_at FROM spatial_zones`)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return []domain.Zone{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	zones := []domain.Zone{}
+	for rows.Next() {
+		var z domain.Zone
+		var id, levelIDStr string
+		if err := rows.Scan(&id, &levelIDStr, &z.Name, &z.Type, &z.PointsJSON, &z.UpdatedAt); err != nil {
+			return nil, err
+		}
+		z.ID = uuid.MustParse(id)
+		z.LevelID = uuid.MustParse(levelIDStr)
+		zones = append(zones, z)
+	}
+	return zones, nil
+}
+
+func (h *HomeMapHandler) queryZonesForLevel(r *http.Request, levelID string) ([]domain.Zone, error) {
+	rows, err := h.db.QueryContext(r.Context(),
+		`SELECT id, level_id, name, type, points_json, updated_at FROM spatial_zones WHERE level_id=?`, levelID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return []domain.Zone{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	zones := []domain.Zone{}
+	for rows.Next() {
+		var z domain.Zone
+		var id, levelIDStr string
+		if err := rows.Scan(&id, &levelIDStr, &z.Name, &z.Type, &z.PointsJSON, &z.UpdatedAt); err != nil {
+			return nil, err
+		}
+		z.ID = uuid.MustParse(id)
+		z.LevelID = uuid.MustParse(levelIDStr)
+		zones = append(zones, z)
+	}
+	return zones, nil
 }
 
 func (h *HomeMapHandler) internalError(w http.ResponseWriter, op string, err error) {
