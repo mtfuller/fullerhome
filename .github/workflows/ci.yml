@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      
+      - name: Download dependencies
+        run: go mod download
+      
+      - name: Build
+        run: go build -o bin/api ./cmd/api
+      
+      - name: Run unit tests
+        run: go test -v -race -coverprofile=coverage.out ./tests/unit/...
+      
+      - name: Run integration tests
+        run: go test -v -race ./tests/integration/...
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.out
+          fail_ci_if_error: false
+        continue-on-error: true

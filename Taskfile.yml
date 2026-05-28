@@ -1,0 +1,100 @@
+version: '3'
+
+vars:
+  BINARY_NAME: api
+  BUILD_DIR: bin
+  MAIN_PATH: ./cmd/api
+  COVERAGE_FILE: coverage.out
+  COVERAGE_HTML: coverage.html
+
+tasks:
+  default:
+    desc: Display available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  build:
+    desc: Build the application
+    cmds:
+      - echo "Building application..."
+      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN_PATH}}
+
+  run:
+    desc: Run the application locally
+    cmds:
+      - echo "Running application..."
+      - go run {{.MAIN_PATH}}/main.go
+
+  test:
+    desc: Run all tests
+    deps:
+      - test-unit
+      - test-integration
+
+  test-unit:
+    desc: Run unit tests
+    cmds:
+      - echo "Running unit tests..."
+      - go test -v -race -coverprofile={{.COVERAGE_FILE}} ./tests/unit/...
+
+  test-integration:
+    desc: Run integration tests
+    cmds:
+      - echo "Running integration tests..."
+      - go test -v -race ./tests/integration/...
+
+  coverage:
+    desc: Generate test coverage report
+    deps:
+      - test-unit
+    cmds:
+      - echo "Generating coverage report..."
+      - go tool cover -html={{.COVERAGE_FILE}} -o {{.COVERAGE_HTML}}
+      - echo "Coverage report generated{{":"}} {{.COVERAGE_HTML}}"
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - echo "Cleaning..."
+      - rm -rf {{.BUILD_DIR}}/
+      - rm -f {{.COVERAGE_FILE}} {{.COVERAGE_HTML}}
+
+  docker-build:
+    desc: Build Docker image
+    cmds:
+      - echo "Building Docker image..."
+      - docker-compose build
+
+  docker-up:
+    desc: Start services with Docker Compose
+    cmds:
+      - echo "Starting services..."
+      - docker-compose up -d
+
+  docker-down:
+    desc: Stop services with Docker Compose
+    cmds:
+      - echo "Stopping services..."
+      - docker-compose down
+
+  docker-logs:
+    desc: View Docker logs
+    cmds:
+      - docker-compose logs -f api
+
+  lint:
+    desc: Run linter
+    preconditions:
+      - sh: command -v golangci-lint
+        msg: "golangci-lint not installed. Install from https://golangci-lint.run/usage/install/"
+    cmds:
+      - echo "Running linter..."
+      - golangci-lint run ./...
+
+  deps:
+    desc: Download dependencies
+    cmds:
+      - echo "Downloading dependencies..."
+      - go mod download
+      - go mod tidy
