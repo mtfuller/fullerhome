@@ -68,6 +68,11 @@ func main() {
 		r.Post("/levels/{levelID}/rooms", homeMap.CreateRoom)
 		r.Put("/levels/{levelID}/rooms/{roomID}", homeMap.UpdateRoom)
 		r.Delete("/levels/{levelID}/rooms/{roomID}", homeMap.DeleteRoom)
+
+		r.Get("/levels/{levelID}/zones", homeMap.ListZones)
+		r.Post("/levels/{levelID}/zones", homeMap.CreateZone)
+		r.Put("/levels/{levelID}/zones/{zoneID}", homeMap.UpdateZone)
+		r.Delete("/levels/{levelID}/zones/{zoneID}", homeMap.DeleteZone)
 	})
 
 	srv := &http.Server{

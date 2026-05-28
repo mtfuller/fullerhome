@@ -68,10 +68,36 @@ export interface AssetMarker {
   updated_at: string
 }
 
+export type ZoneType =
+  | 'GRASS' | 'DRIVEWAY' | 'FLOWER_BED' | 'PATIO' | 'DECK'
+  | 'GARDEN' | 'POOL' | 'SIDEWALK' | 'PARKING'
+
+export const ZONE_TYPE_LABELS: Record<ZoneType, string> = {
+  GRASS: 'Grass', DRIVEWAY: 'Driveway', FLOWER_BED: 'Flower Bed',
+  PATIO: 'Patio', DECK: 'Deck', GARDEN: 'Garden',
+  POOL: 'Pool', SIDEWALK: 'Sidewalk', PARKING: 'Parking',
+}
+
+export const ZONE_TYPE_COLOURS: Record<ZoneType, string> = {
+  GRASS: '#6b9e5e', DRIVEWAY: '#9e9e8e', FLOWER_BED: '#c4709a',
+  PATIO: '#c8b89a', DECK: '#a07848', GARDEN: '#3e6b3e',
+  POOL: '#5ba8c8', SIDEWALK: '#b0b0a0', PARKING: '#6c6c6c',
+}
+
+export interface Zone {
+  id: string
+  level_id: string
+  name: string
+  type: ZoneType
+  points_json: string
+  updated_at: string
+}
+
 export interface HomeMapState {
   levels: HomeLevel[]
   markers: AssetMarker[]
   rooms: Room[]
+  zones: Zone[]
 }
 
 export interface Point {

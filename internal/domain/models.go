@@ -70,6 +70,30 @@ type AssetMarker struct {
 	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
+type ZoneType string
+
+const (
+	ZoneGrass     ZoneType = "GRASS"
+	ZoneDriveway  ZoneType = "DRIVEWAY"
+	ZoneFlowerBed ZoneType = "FLOWER_BED"
+	ZonePatio     ZoneType = "PATIO"
+	ZoneDeck      ZoneType = "DECK"
+	ZoneGarden    ZoneType = "GARDEN"
+	ZonePool      ZoneType = "POOL"
+	ZoneSidewalk  ZoneType = "SIDEWALK"
+	ZoneParking   ZoneType = "PARKING"
+)
+
+// Zone represents a named filled area on a level (grass, driveway, flower bed, etc.).
+type Zone struct {
+	ID         uuid.UUID `json:"id"`
+	LevelID    uuid.UUID `json:"level_id"`
+	Name       string    `json:"name"`
+	Type       ZoneType  `json:"type"`
+	PointsJSON string    `json:"points_json"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 // SensorTelemetry encapsulates raw environment streams tied to a spatial position.
 type SensorTelemetry struct {
 	ID          int64     `json:"id"`
@@ -106,6 +130,18 @@ type UpdateMarkerRequest struct {
 	XCoordinate float64        `json:"x_coordinate"`
 	YCoordinate float64        `json:"y_coordinate"`
 	Notes       string         `json:"notes"`
+}
+
+type CreateZoneRequest struct {
+	Name       string   `json:"name"`
+	Type       ZoneType `json:"type"`
+	PointsJSON string   `json:"points_json"`
+}
+
+type UpdateZoneRequest struct {
+	Name       string   `json:"name"`
+	Type       ZoneType `json:"type"`
+	PointsJSON string   `json:"points_json"`
 }
 
 type CreateRoomRequest struct {

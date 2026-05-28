@@ -1,23 +1,34 @@
 import { useEffect, useRef, useCallback } from 'react'
-import type { WallSegment, AssetMarker, Room, Point, MarkerCategory } from './types'
-import { PALETTE, MARKER_CATEGORY_COLOURS, MARKER_CATEGORY_ABBREV, newId } from './types'
+import type { WallSegment, AssetMarker, Room, Zone, Point, MarkerCategory, ZoneType } from './types'
+import { PALETTE, MARKER_CATEGORY_COLOURS, MARKER_CATEGORY_ABBREV, ZONE_TYPE_COLOURS, ZONE_TYPE_LABELS, newId } from './types'
 
-export type EditMode = 'select' | 'draw' | 'room' | 'marker'
+export type EditMode = 'select' | 'draw' | 'room' | 'marker' | 'zone'
 
 export interface Selection {
-  kind: 'none' | 'vertex' | 'wall' | 'marker' | 'room'
+  kind: 'none' | 'vertex' | 'wall' | 'marker' | 'room' | 'zone'
   wallId?: string
   pointIndex?: number
   markerId?: string
   roomId?: string
+  zoneId?: string
+}
+
+export interface GhostLevel {
+  walls: WallSegment[]
+  markers: AssetMarker[]
+  rooms: Room[]
+  zones: Zone[]
 }
 
 interface Props {
   walls: WallSegment[]
   markers: AssetMarker[]
   rooms: Room[]
+  zones: Zone[]
+  ghostLevels: GhostLevel[]
   mode: EditMode
   selectedCategory: MarkerCategory
+  selectedZoneType: ZoneType
   onWallsChange: (walls: WallSegment[]) => void
   onMarkerPlace: (x: number, y: number) => void
   onMarkerMove: (id: string, x: number, y: number) => void
@@ -25,6 +36,8 @@ interface Props {
   onRoomPlace: (x: number, y: number) => void
   onRoomMove: (id: string, x: number, y: number) => void
   onRoomDelete: (id: string) => void
+  onZoneCreate: (points: Point[], type: ZoneType, name: string) => void
+  onZoneDelete: (id: string) => void
   selection: Selection
   onSelectionChange: (s: Selection) => void
 }
@@ -36,6 +49,9 @@ const LINE_HIT = 6
 const FONT_VERTEX = '12px sans-serif'
 const FONT_LABEL = '11px sans-serif'
 const FONT_ROOM = 'italic 13px Georgia, serif'
+
+const MIN_SCALE = 0.15
+const MAX_SCALE = 10
 
 function toPx(pct: number, dim: number) { return (pct / 100) * dim }
 function toPct(px: number, dim: number) { return (px / dim) * 100 }
@@ -62,27 +78,87 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath()
 }
 
+function parseZonePoints(json: string): Point[] {
+  try {
+    const arr = JSON.parse(json)
+    if (!Array.isArray(arr)) return []
+    return arr.filter((v): v is Point => typeof v === 'object' && v !== null && 'x' in v && 'y' in v)
+  } catch { return [] }
+}
+
+function drawZones(ctx: CanvasRenderingContext2D, zones: Zone[], W: number, H: number, selZoneId?: string) {
+  zones.forEach(zone => {
+    const pts = parseZonePoints(zone.points_json)
+    if (pts.length < 3) return
+    const colour = ZONE_TYPE_COLOURS[zone.type] ?? '#888'
+    const isSel = zone.id === selZoneId
+    ctx.beginPath()
+    pts.forEach((pt, i) => {
+      const px = toPx(pt.x, W), py = toPx(pt.y, H)
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+    })
+    ctx.closePath()
+    ctx.fillStyle = colour + (isSel ? '55' : '30')
+    ctx.fill()
+    ctx.strokeStyle = isSel ? PALETTE.terracotta : colour + 'cc'
+    ctx.lineWidth = isSel ? 2 : 1.5
+    ctx.stroke()
+    // Centroid label
+    const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length
+    const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length
+    ctx.fillStyle = isSel ? PALETTE.terracotta : colour
+    ctx.font = '11px sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText(zone.name || ZONE_TYPE_LABELS[zone.type], toPx(cx, W), toPx(cy, H) + 4)
+  })
+}
+
+function drawWalls(ctx: CanvasRenderingContext2D, walls: WallSegment[], W: number, H: number, sel: Selection) {
+  walls.forEach(wall => {
+    if (wall.points.length < 2) return
+    const isSel = sel.kind === 'wall' && sel.wallId === wall.id
+    ctx.beginPath()
+    wall.points.forEach((pt, i) => {
+      const px = toPx(pt.x, W), py = toPx(pt.y, H)
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+    })
+    if (wall.closed) ctx.closePath()
+    ctx.strokeStyle = isSel ? PALETTE.terracotta : PALETTE.sage
+    ctx.lineWidth = isSel ? 3 : 2
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.stroke()
+  })
+}
+
 export function HomeMapCanvas({
-  walls, markers, rooms, mode, selectedCategory,
+  walls, markers, rooms, zones, ghostLevels, mode, selectedCategory, selectedZoneType,
   onWallsChange, onMarkerPlace, onMarkerMove, onMarkerDelete,
   onRoomPlace, onRoomMove, onRoomDelete,
+  onZoneCreate, onZoneDelete,
   selection, onSelectionChange,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
-  // Stable refs to avoid stale closures in event handlers
+  // Stable refs to avoid stale closures
   const wallsRef = useRef(walls)
   const markersRef = useRef(markers)
   const roomsRef = useRef(rooms)
+  const zonesRef = useRef(zones)
+  const ghostRef = useRef(ghostLevels)
   const modeRef = useRef(mode)
   const selRef = useRef(selection)
   const catRef = useRef(selectedCategory)
+  const zoneTypeRef = useRef(selectedZoneType)
   wallsRef.current = walls
   markersRef.current = markers
   roomsRef.current = rooms
+  zonesRef.current = zones
+  ghostRef.current = ghostLevels
   modeRef.current = mode
   selRef.current = selection
   catRef.current = selectedCategory
+  zoneTypeRef.current = selectedZoneType
 
   // Mutable drawing state (no re-renders during mouse move)
   const drawing = useRef({ active: false, points: [] as Point[], cursor: null as Point | null, snap: null as Point | null })
@@ -96,6 +172,29 @@ export function HomeMapCanvas({
     itemId: null as string | null,
   })
 
+  // Pan/zoom viewport (screen-space offset and scale)
+  const viewport = useRef({ x: 0, y: 0, scale: 1 })
+
+  // Panning state (middle-click or space+drag)
+  const panning = useRef({ active: false, startX: 0, startY: 0, vpX: 0, vpY: 0 })
+  const spaceHeld = useRef(false)
+
+  // --- Coordinate helpers that account for viewport ---
+
+  function screenToCanvas(screenX: number, screenY: number, W: number, H: number) {
+    const vp = viewport.current
+    const px = (screenX - vp.x) / vp.scale
+    const py = (screenY - vp.y) / vp.scale
+    return { px, py, pctX: toPct(px, W), pctY: toPct(py, H) }
+  }
+
+  function canvasCoords(e: React.MouseEvent<HTMLCanvasElement>) {
+    const c = canvasRef.current!
+    const r = c.getBoundingClientRect()
+    const W = c.width, H = c.height
+    return { ...screenToCanvas(e.clientX - r.left, e.clientY - r.top, W, H), W, H }
+  }
+
   // --- Canvas drawing ---
 
   const draw = useCallback(() => {
@@ -107,28 +206,38 @@ export function HomeMapCanvas({
 
     ctx.clearRect(0, 0, W, H)
 
+    const vp = viewport.current
+    ctx.save()
+    ctx.setTransform(vp.scale, 0, 0, vp.scale, vp.x, vp.y)
+
     const ws = wallsRef.current
     const ms = markersRef.current
     const rs = roomsRef.current
+    const zs = zonesRef.current
+    const ghosts = ghostRef.current
     const sel = selRef.current
     const dr = drawing.current
 
-    // Walls
-    ws.forEach(wall => {
-      if (wall.points.length < 2) return
-      const isSel = sel.kind === 'wall' && sel.wallId === wall.id
-      ctx.beginPath()
-      wall.points.forEach((pt, i) => {
-        const px = toPx(pt.x, W), py = toPx(pt.y, H)
-        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+    // Ghost levels (other floors at low opacity)
+    ctx.globalAlpha = 0.18
+    ghosts.forEach(ghost => {
+      drawZones(ctx, ghost.zones, W, H)
+      drawWalls(ctx, ghost.walls, W, H, { kind: 'none' })
+      ghost.markers.forEach(marker => {
+        const mx = toPx(marker.x_coordinate, W), my = toPx(marker.y_coordinate, H)
+        const colour = MARKER_CATEGORY_COLOURS[marker.category] ?? PALETTE.terracotta
+        roundRect(ctx, mx - MARKER_HALF, my - MARKER_HALF, MARKER_HALF * 2, MARKER_HALF * 2, 3)
+        ctx.fillStyle = colour
+        ctx.fill()
       })
-      if (wall.closed) ctx.closePath()
-      ctx.strokeStyle = isSel ? PALETTE.terracotta : PALETTE.sage
-      ctx.lineWidth = isSel ? 3 : 2
-      ctx.lineCap = 'round'
-      ctx.lineJoin = 'round'
-      ctx.stroke()
     })
+    ctx.globalAlpha = 1
+
+    // Active level: zones first (beneath walls)
+    drawZones(ctx, zs, W, H, sel.kind === 'zone' ? sel.zoneId : undefined)
+
+    // Active level: walls
+    drawWalls(ctx, ws, W, H, sel)
 
     // Vertex handles in select mode
     if (modeRef.current === 'select') {
@@ -193,10 +302,28 @@ export function HomeMapCanvas({
       ctx.fillText(marker.label, mx, my + MARKER_HALF + 13)
     })
 
-    // Drawing preview
-    if (modeRef.current === 'draw') {
+    // Drawing preview (walls and zones share the same drawing state)
+    if (modeRef.current === 'draw' || modeRef.current === 'zone') {
+      const isZoneMode = modeRef.current === 'zone'
+      const zoneColour = ZONE_TYPE_COLOURS[zoneTypeRef.current] ?? '#888'
+
       if (dr.active && dr.points.length > 0) {
-        ctx.strokeStyle = PALETTE.terracotta
+        const tip = dr.snap ?? dr.cursor
+
+        if (isZoneMode && dr.points.length >= 2) {
+          // Filled polygon preview for zone mode
+          ctx.beginPath()
+          dr.points.forEach((pt, i) => {
+            const px = toPx(pt.x, W), py = toPx(pt.y, H)
+            i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+          })
+          if (tip) ctx.lineTo(toPx(tip.x, W), toPx(tip.y, H))
+          ctx.closePath()
+          ctx.fillStyle = zoneColour + '30'
+          ctx.fill()
+        }
+
+        ctx.strokeStyle = isZoneMode ? zoneColour : PALETTE.terracotta
         ctx.lineWidth = 2
         ctx.lineCap = 'round'
         ctx.setLineDash([6, 4])
@@ -205,8 +332,8 @@ export function HomeMapCanvas({
           const px = toPx(pt.x, W), py = toPx(pt.y, H)
           i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
         })
-        const tip = dr.snap ?? dr.cursor
         if (tip) ctx.lineTo(toPx(tip.x, W), toPx(tip.y, H))
+        if (isZoneMode) ctx.closePath()
         ctx.stroke()
         ctx.setLineDash([])
 
@@ -214,7 +341,7 @@ export function HomeMapCanvas({
         dr.points.forEach(pt => {
           ctx.beginPath()
           ctx.arc(toPx(pt.x, W), toPx(pt.y, H), 4, 0, Math.PI * 2)
-          ctx.fillStyle = PALETTE.terracotta
+          ctx.fillStyle = isZoneMode ? zoneColour : PALETTE.terracotta
           ctx.fill()
         })
       }
@@ -223,7 +350,7 @@ export function HomeMapCanvas({
       if (dr.snap) {
         ctx.beginPath()
         ctx.arc(toPx(dr.snap.x, W), toPx(dr.snap.y, H), SNAP_PX * 0.65, 0, Math.PI * 2)
-        ctx.strokeStyle = PALETTE.terracotta
+        ctx.strokeStyle = isZoneMode ? (ZONE_TYPE_COLOURS[zoneTypeRef.current] ?? '#888') : PALETTE.terracotta
         ctx.lineWidth = 1.5
         ctx.stroke()
       }
@@ -232,14 +359,26 @@ export function HomeMapCanvas({
       if (!dr.active && dr.cursor) {
         ctx.beginPath()
         ctx.arc(toPx(dr.cursor.x, W), toPx(dr.cursor.y, H), 4, 0, Math.PI * 2)
-        ctx.fillStyle = PALETTE.terracotta
+        ctx.fillStyle = isZoneMode ? (ZONE_TYPE_COLOURS[zoneTypeRef.current] ?? '#888') : PALETTE.terracotta
         ctx.globalAlpha = 0.45
         ctx.fill()
         ctx.globalAlpha = 1
       }
     }
 
-    void FONT_VERTEX // keep import used
+    ctx.restore()
+
+    // Zoom indicator (drawn in screen space, outside transform)
+    const scale = vp.scale
+    if (Math.abs(scale - 1) > 0.02) {
+      const label = `${Math.round(scale * 100)}%`
+      ctx.font = '11px sans-serif'
+      ctx.fillStyle = 'rgba(0,0,0,0.4)'
+      ctx.textAlign = 'right'
+      ctx.fillText(label, W - 10, H - 10)
+    }
+
+    void FONT_VERTEX
   }, [])
 
   useEffect(() => {
@@ -254,23 +393,17 @@ export function HomeMapCanvas({
     return () => obs.disconnect()
   }, [draw])
 
-  useEffect(() => { draw() }, [draw, walls, markers, rooms, selection, mode])
+  useEffect(() => { draw() }, [draw, walls, markers, rooms, zones, ghostLevels, selection, mode, selectedZoneType])
 
   // --- Hit testing ---
 
-  function canvasCoords(e: React.MouseEvent<HTMLCanvasElement>) {
-    const c = canvasRef.current!
-    const r = c.getBoundingClientRect()
-    return { px: e.clientX - r.left, py: e.clientY - r.top, W: c.width, H: c.height }
-  }
-
-  function findSnap(pcx: number, pcy: number, W: number, H: number, skipWall?: string, skipIdx?: number): Point | null {
+  function findSnap(pctX: number, pctY: number, W: number, H: number, skipWall?: string, skipIdx?: number): Point | null {
     const r2 = SNAP_PX * SNAP_PX
     for (const wall of wallsRef.current) {
       for (let i = 0; i < wall.points.length; i++) {
         if (wall.id === skipWall && i === skipIdx) continue
         const vx = toPx(wall.points[i].x, W), vy = toPx(wall.points[i].y, H)
-        const cx = toPx(pcx, W), cy = toPx(pcy, H)
+        const cx = toPx(pctX, W), cy = toPx(pctY, H)
         if ((cx - vx) ** 2 + (cy - vy) ** 2 < r2) return wall.points[i]
       }
     }
@@ -325,11 +458,65 @@ export function HomeMapCanvas({
     return null
   }
 
+  function hitZone(px: number, py: number, W: number, H: number): string | null {
+    // Point-in-polygon test (ray casting)
+    for (const zone of zonesRef.current) {
+      const pts = parseZonePoints(zone.points_json)
+      if (pts.length < 3) continue
+      let inside = false
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const xi = toPx(pts[i].x, W), yi = toPx(pts[i].y, H)
+        const xj = toPx(pts[j].x, W), yj = toPx(pts[j].y, H)
+        if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi)
+          inside = !inside
+      }
+      if (inside) return zone.id
+    }
+    return null
+  }
+
+  // --- Zoom/pan handlers ---
+
+  const handleWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault()
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const r = canvas.getBoundingClientRect()
+    const mouseX = e.clientX - r.left
+    const mouseY = e.clientY - r.top
+    const factor = e.deltaY < 0 ? 1.1 : 0.9
+    const vp = viewport.current
+    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, vp.scale * factor))
+    viewport.current = {
+      scale: newScale,
+      x: mouseX - (mouseX - vp.x) * (newScale / vp.scale),
+      y: mouseY - (mouseY - vp.y) * (newScale / vp.scale),
+    }
+    draw()
+  }, [draw])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    canvas.addEventListener('wheel', handleWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', handleWheel)
+  }, [handleWheel])
+
   // --- Event handlers ---
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const { px, py, W, H } = canvasCoords(e)
-    const pctX = toPct(px, W), pctY = toPct(py, H)
+    // Pan in progress
+    if (panning.current.active) {
+      viewport.current = {
+        ...viewport.current,
+        x: panning.current.vpX + (e.clientX - panning.current.startX),
+        y: panning.current.vpY + (e.clientY - panning.current.startY),
+      }
+      draw()
+      return
+    }
+
+    const { px, py, pctX, pctY, W, H } = canvasCoords(e)
     const dg = drag.current
 
     if (dg.active) {
@@ -348,7 +535,8 @@ export function HomeMapCanvas({
       return
     }
 
-    if (modeRef.current === 'draw') {
+    void px; void py
+    if (modeRef.current === 'draw' || modeRef.current === 'zone') {
       const snap = drawing.current.active ? findSnap(pctX, pctY, W, H) : null
       drawing.current.cursor = { x: pctX, y: pctY }
       drawing.current.snap = snap
@@ -357,6 +545,13 @@ export function HomeMapCanvas({
   }, [onWallsChange, onMarkerMove, onRoomMove, draw])
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Middle-click or space+left-click → pan
+    if (e.button === 1 || (e.button === 0 && spaceHeld.current)) {
+      e.preventDefault()
+      panning.current = { active: true, startX: e.clientX, startY: e.clientY, vpX: viewport.current.x, vpY: viewport.current.y }
+      return
+    }
+
     if (modeRef.current !== 'select') return
     const { px, py, W, H } = canvasCoords(e)
 
@@ -380,18 +575,31 @@ export function HomeMapCanvas({
     }
     const wid = hitWall(px, py, W, H)
     if (wid) { onSelectionChange({ kind: 'wall', wallId: wid }); return }
+    const zid = hitZone(px, py, W, H)
+    if (zid) { onSelectionChange({ kind: 'zone', zoneId: zid }); return }
     onSelectionChange({ kind: 'none' })
   }, [onSelectionChange])
 
-  const handleMouseUp = useCallback(() => {
+  const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (panning.current.active) {
+      panning.current.active = false
+      e.preventDefault()
+      return
+    }
     drag.current = { active: false, kind: null, wallId: null, pointIdx: null, itemId: null }
   }, [])
 
   const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const { px, py, W, H } = canvasCoords(e)
-    const pctX = toPct(px, W), pctY = toPct(py, H)
+    if (panning.current.active) return
+    const { pctX, pctY, W, H } = canvasCoords(e)
 
     if (modeRef.current === 'draw') {
+      const snap = findSnap(pctX, pctY, W, H)
+      const pt = snap ?? { x: pctX, y: pctY }
+      drawing.current.active = true
+      drawing.current.points = [...drawing.current.points, pt]
+      draw()
+    } else if (modeRef.current === 'zone') {
       const snap = findSnap(pctX, pctY, W, H)
       const pt = snap ?? { x: pctX, y: pctY }
       drawing.current.active = true
@@ -405,25 +613,51 @@ export function HomeMapCanvas({
   }, [onMarkerPlace, onRoomPlace, draw])
 
   const handleDoubleClick = useCallback(() => {
-    if (modeRef.current !== 'draw') return
+    if (panning.current.active) return
+    const mode = modeRef.current
+    if (mode !== 'draw' && mode !== 'zone') return
+
     const pts = drawing.current.points
     // Double-click fires two clicks then dblclick; remove duplicate last point
     const finalPts = pts.length >= 2 ? pts.slice(0, -1) : pts
-    if (finalPts.length >= 2) {
-      const seg: WallSegment = { id: newId(), points: finalPts, closed: false }
-      onWallsChange([...wallsRef.current, seg])
+
+    if (mode === 'draw') {
+      if (finalPts.length >= 2) {
+        const seg: WallSegment = { id: newId(), points: finalPts, closed: false }
+        onWallsChange([...wallsRef.current, seg])
+      }
+    } else if (mode === 'zone') {
+      if (finalPts.length >= 3) {
+        onZoneCreate(finalPts, zoneTypeRef.current, '')
+      }
     }
     drawing.current = { active: false, points: [], cursor: null, snap: null }
     draw()
-  }, [onWallsChange, draw])
+  }, [onWallsChange, onZoneCreate, draw])
+
+  const handleMouseLeave = useCallback(() => {
+    panning.current.active = false
+    drawing.current.cursor = null
+    draw()
+  }, [draw])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && modeRef.current === 'draw') {
+      if (e.key === ' ') { spaceHeld.current = true; e.preventDefault() }
+
+      if ((e.key === 'Escape') && (modeRef.current === 'draw' || modeRef.current === 'zone')) {
         drawing.current = { active: false, points: [], cursor: null, snap: null }
         draw()
         return
       }
+
+      // Reset viewport
+      if (e.key === '0' && !e.ctrlKey && !e.metaKey && (e.target as HTMLElement).tagName !== 'INPUT') {
+        viewport.current = { x: 0, y: 0, scale: 1 }
+        draw()
+        return
+      }
+
       if ((e.key === 'Delete' || e.key === 'Backspace') && (e.target as HTMLElement).tagName !== 'INPUT') {
         const sel = selRef.current
         if (sel.kind === 'vertex' && sel.wallId) {
@@ -446,14 +680,29 @@ export function HomeMapCanvas({
         } else if (sel.kind === 'room' && sel.roomId) {
           onRoomDelete(sel.roomId)
           onSelectionChange({ kind: 'none' })
+        } else if (sel.kind === 'zone' && sel.zoneId) {
+          onZoneDelete(sel.zoneId)
+          onSelectionChange({ kind: 'none' })
         }
       }
     }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === ' ') { spaceHeld.current = false; panning.current.active = false }
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onWallsChange, onMarkerDelete, onRoomDelete, onSelectionChange, draw])
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [onWallsChange, onMarkerDelete, onRoomDelete, onZoneDelete, onSelectionChange, draw])
 
-  const cursor = mode === 'draw' ? 'crosshair' : mode === 'marker' || mode === 'room' ? 'copy' : 'default'
+  const isPanMode = mode === 'select' && spaceHeld.current
+  const cursor = isPanMode
+    ? (panning.current.active ? 'grabbing' : 'grab')
+    : mode === 'draw' || mode === 'zone' ? 'crosshair'
+    : mode === 'marker' || mode === 'room' ? 'copy'
+    : 'default'
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -465,7 +714,8 @@ export function HomeMapCanvas({
         onMouseUp={handleMouseUp}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
-        onMouseLeave={() => { drawing.current.cursor = null; draw() }}
+        onMouseLeave={handleMouseLeave}
+        onContextMenu={e => e.preventDefault()}
       />
     </div>
   )
