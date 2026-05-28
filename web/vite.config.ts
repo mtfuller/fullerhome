@@ -7,6 +7,7 @@ export default defineConfig({
     outDir: '../static',
     emptyOutDir: true,
     rollupOptions: {
+      input: 'src/main.tsx',
       output: {
         entryFileNames: 'main.js',
         chunkFileNames: '[name].js',
