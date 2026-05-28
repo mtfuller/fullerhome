@@ -1,0 +1,41 @@
+package pages
+
+import (
+	"encoding/json"
+	"github.com/mtfuller/fullerhome/internal/domain"
+	"github.com/mtfuller/fullerhome/templates"
+)
+
+type HomeMapState struct {
+	Levels  []domain.HomeLevel  `json:"levels"`
+	Markers []domain.AssetMarker `json:"markers"`
+	Rooms   []domain.Room        `json:"rooms"`
+}
+
+templ HomeMap(levels []domain.HomeLevel, markers []domain.AssetMarker, rooms []domain.Room) {
+	@templates.Layout("Home Map") {
+		<style>
+			#home-map-root {
+				height: calc(100vh - 88px);
+				overflow: hidden;
+			}
+		</style>
+		<div
+			id="home-map-root"
+			data-state={ homeMapStateJSON(levels, markers, rooms) }
+		></div>
+		<script src="/static/main.js" defer></script>
+	}
+}
+
+func homeMapStateJSON(levels []domain.HomeLevel, markers []domain.AssetMarker, rooms []domain.Room) string {
+	state := HomeMapState{Levels: levels, Markers: markers, Rooms: rooms}
+	if markers == nil {
+		state.Markers = []domain.AssetMarker{}
+	}
+	if rooms == nil {
+		state.Rooms = []domain.Room{}
+	}
+	b, _ := json.Marshal(state)
+	return string(b)
+}

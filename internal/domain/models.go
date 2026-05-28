@@ -6,47 +6,68 @@ import (
 	"github.com/google/uuid"
 )
 
-// LevelType represents the vertical categorization of structural planes.
 type LevelType string
 
 const (
-	LevelYard     LevelType = "YARD"
 	LevelBasement LevelType = "BASEMENT"
-	LevelMain     LevelType = "MAIN"
-	LevelUpper    LevelType = "UPPER"
+	LevelGround   LevelType = "GROUND"
+	LevelFloor1   LevelType = "FLOOR_1"
+	LevelFloor2   LevelType = "FLOOR_2"
+	LevelFloor3   LevelType = "FLOOR_3"
+	LevelAttic    LevelType = "ATTIC"
+	LevelGarage   LevelType = "GARAGE"
+	LevelYard     LevelType = "YARD"
 )
 
-// AssetCategory classifies the semantic type of a placed marker.
-type AssetCategory string
+type MarkerCategory string
 
 const (
-	CategoryUtility  AssetCategory = "UTILITY"
-	CategoryStorage  AssetCategory = "STORAGE"
-	CategoryPest     AssetCategory = "PEST"
-	CategoryWorkshop AssetCategory = "WORKSHOP"
+	CategoryOutlet    MarkerCategory = "OUTLET"
+	CategorySwitch    MarkerCategory = "SWITCH"
+	CategoryAppliance MarkerCategory = "APPLIANCE"
+	CategoryFurniture MarkerCategory = "FURNITURE"
+	CategorySensor    MarkerCategory = "SENSOR"
+	CategoryHVAC      MarkerCategory = "HVAC"
+	CategoryPlumbing  MarkerCategory = "PLUMBING"
+	CategoryLighting  MarkerCategory = "LIGHTING"
+	CategoryDoor      MarkerCategory = "DOOR"
+	CategoryWindow    MarkerCategory = "WINDOW"
+	CategoryUtility   MarkerCategory = "UTILITY"
+	CategoryStorage   MarkerCategory = "STORAGE"
+	CategoryBreaker   MarkerCategory = "BREAKER"
 )
 
-// SpatialLevel represents a single physical layer containing structural bounds.
-type SpatialLevel struct {
+// HomeLevel represents a single physical layer of the home.
+type HomeLevel struct {
 	ID         uuid.UUID `json:"id"`
 	Name       string    `json:"name"`
 	Type       LevelType `json:"type"`
 	OrderIndex int       `json:"order_index"`
-	WallsJSON  string    `json:"walls_json"` // raw polyline array for structural vector definitions
+	WallsJSON  string    `json:"walls_json"`
 	CreatedBy  string    `json:"created_by"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
-// AssetMarker defines a contextual point placed on the relative vector plane of a level.
+// Room represents a named area on a level (e.g. "Kitchen", "Master Bedroom").
+type Room struct {
+	ID          uuid.UUID `json:"id"`
+	LevelID     uuid.UUID `json:"level_id"`
+	Name        string    `json:"name"`
+	XCoordinate float64   `json:"x_coordinate"`
+	YCoordinate float64   `json:"y_coordinate"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// AssetMarker defines a contextual point placed on a level.
 type AssetMarker struct {
-	ID          uuid.UUID     `json:"id"`
-	LevelID     uuid.UUID     `json:"level_id"`
-	Label       string        `json:"label"`
-	Category    AssetCategory `json:"category"`
-	XCoordinate float64       `json:"x_coordinate"` // percentage offset 0.0–100.0
-	YCoordinate float64       `json:"y_coordinate"` // percentage offset 0.0–100.0
-	Notes       string        `json:"notes"`
-	UpdatedAt   time.Time     `json:"updated_at"`
+	ID          uuid.UUID      `json:"id"`
+	LevelID     uuid.UUID      `json:"level_id"`
+	Label       string         `json:"label"`
+	Category    MarkerCategory `json:"category"`
+	XCoordinate float64        `json:"x_coordinate"`
+	YCoordinate float64        `json:"y_coordinate"`
+	Notes       string         `json:"notes"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
 // SensorTelemetry encapsulates raw environment streams tied to a spatial position.
@@ -59,19 +80,42 @@ type SensorTelemetry struct {
 	Timestamp   time.Time `json:"timestamp"`
 }
 
-// CreateLevelRequest is the input payload for POST /api/v1/levels.
 type CreateLevelRequest struct {
 	Name      string    `json:"name"`
 	Type      LevelType `json:"type"`
-	WallsJSON string    `json:"walls_json"`
 	CreatedBy string    `json:"created_by"`
 }
 
-// CreateMarkerRequest is the input payload for POST /api/v1/levels/{levelID}/markers.
+type UpdateLevelRequest struct {
+	Name      string    `json:"name"`
+	Type      LevelType `json:"type"`
+	WallsJSON string    `json:"walls_json"`
+}
+
 type CreateMarkerRequest struct {
-	Label       string        `json:"label"`
-	Category    AssetCategory `json:"category"`
-	XCoordinate float64       `json:"x_coordinate"`
-	YCoordinate float64       `json:"y_coordinate"`
-	Notes       string        `json:"notes"`
+	Label       string         `json:"label"`
+	Category    MarkerCategory `json:"category"`
+	XCoordinate float64        `json:"x_coordinate"`
+	YCoordinate float64        `json:"y_coordinate"`
+	Notes       string         `json:"notes"`
+}
+
+type UpdateMarkerRequest struct {
+	Label       string         `json:"label"`
+	Category    MarkerCategory `json:"category"`
+	XCoordinate float64        `json:"x_coordinate"`
+	YCoordinate float64        `json:"y_coordinate"`
+	Notes       string         `json:"notes"`
+}
+
+type CreateRoomRequest struct {
+	Name        string  `json:"name"`
+	XCoordinate float64 `json:"x_coordinate"`
+	YCoordinate float64 `json:"y_coordinate"`
+}
+
+type UpdateRoomRequest struct {
+	Name        string  `json:"name"`
+	XCoordinate float64 `json:"x_coordinate"`
+	YCoordinate float64 `json:"y_coordinate"`
 }

@@ -47,17 +47,27 @@ func main() {
 	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(cfg.StaticDir))))
 
 	health := handlers.NewHealthHandler(db)
-	spatial := handlers.NewSpatialHandler(db, logger)
+	homeMap := handlers.NewHomeMapHandler(db, logger)
 
 	r.Get("/health", health.Check)
-	r.Get("/", spatial.Dashboard)
-	r.Get("/spatial", spatial.SpatialMap)
+	r.Get("/", homeMap.Dashboard)
+	r.Get("/home-map", homeMap.HomeMap)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Get("/levels", spatial.ListLevels)
-		r.Post("/levels", spatial.CreateLevel)
-		r.Get("/levels/{levelID}/markers", spatial.ListMarkers)
-		r.Post("/levels/{levelID}/markers", spatial.CreateMarker)
+		r.Get("/levels", homeMap.ListLevels)
+		r.Post("/levels", homeMap.CreateLevel)
+		r.Put("/levels/{levelID}", homeMap.UpdateLevel)
+		r.Delete("/levels/{levelID}", homeMap.DeleteLevel)
+
+		r.Get("/levels/{levelID}/markers", homeMap.ListMarkers)
+		r.Post("/levels/{levelID}/markers", homeMap.CreateMarker)
+		r.Put("/levels/{levelID}/markers/{markerID}", homeMap.UpdateMarker)
+		r.Delete("/levels/{levelID}/markers/{markerID}", homeMap.DeleteMarker)
+
+		r.Get("/levels/{levelID}/rooms", homeMap.ListRooms)
+		r.Post("/levels/{levelID}/rooms", homeMap.CreateRoom)
+		r.Put("/levels/{levelID}/rooms/{roomID}", homeMap.UpdateRoom)
+		r.Delete("/levels/{levelID}/rooms/{roomID}", homeMap.DeleteRoom)
 	})
 
 	srv := &http.Server{
