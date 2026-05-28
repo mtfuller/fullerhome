@@ -1,35 +1,30 @@
-# Build stage
-FROM golang:1.21-alpine AS builder
+### Stage 1: Build React bundle
+FROM node:20-alpine AS ui-builder
+WORKDIR /web
+COPY web/package*.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
 
-# Install build dependencies
+### Stage 2: Build Go binary
+FROM golang:1.22-alpine AS go-builder
 RUN apk add --no-cache git
-
 WORKDIR /app
-
-# Copy go mod files
 COPY go.mod go.sum ./
-
-# Download dependencies
 RUN go mod download
-
-# Copy source code
 COPY . .
+COPY --from=ui-builder /web/../static ./static
+RUN go install github.com/a-h/templ/cmd/templ@latest && \
+    templ generate ./templates/... && \
+    go build -ldflags="-s -w" -o bin/server ./cmd/server
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/api
-
-# Final stage
-FROM alpine:latest
-
-RUN apk --no-cache add ca-certificates
-
-WORKDIR /root/
-
-# Copy the binary from builder
-COPY --from=builder /app/main .
-
-# Expose port
+### Stage 3: Minimal runtime image
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata
+WORKDIR /app
+COPY --from=go-builder /app/bin/server ./server
+COPY --from=go-builder /app/static ./static
 EXPOSE 8080
-
-# Run the application
-CMD ["./main"]
+ENV SERVER_PORT=8080 DATABASE_PATH=/data/fullerhome.db STATIC_DIR=/app/static
+VOLUME ["/data"]
+CMD ["./server"]
