@@ -1,9 +1,9 @@
 version: '3'
 
 vars:
-  BINARY_NAME: api
+  BINARY_NAME: server
   BUILD_DIR: bin
-  MAIN_PATH: ./cmd/api
+  MAIN_PATH: ./cmd/server
   COVERAGE_FILE: coverage.out
   COVERAGE_HTML: coverage.html
 
@@ -14,87 +14,76 @@ tasks:
       - task --list
     silent: true
 
-  build:
-    desc: Build the application
+  gen:
+    desc: Generate Go code from Templ source files
     cmds:
-      - echo "Building application..."
+      - templ generate ./templates/...
+
+  build:
+    desc: Build the server binary
+    deps: [gen]
+    cmds:
       - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN_PATH}}
 
-  run:
-    desc: Run the application locally
+  build-ui:
+    desc: Build the React canvas bundle into static/
+    dir: web
     cmds:
-      - echo "Running application..."
+      - npm run build
+
+  run:
+    desc: Run the server locally (requires gen + build-ui to have been run)
+    cmds:
       - go run {{.MAIN_PATH}}/main.go
+
+  dev:
+    desc: Run server and Vite dev server concurrently
+    deps: [gen]
+    cmds:
+      - |
+        (cd web && npm run dev) &
+        go run {{.MAIN_PATH}}/main.go
 
   test:
     desc: Run all tests
-    deps:
-      - test-unit
-      - test-integration
+    deps: [test-unit, test-integration]
 
   test-unit:
-    desc: Run unit tests
+    desc: Run unit tests with race detector and coverage
     cmds:
-      - echo "Running unit tests..."
       - go test -v -race -coverprofile={{.COVERAGE_FILE}} ./tests/unit/...
 
   test-integration:
     desc: Run integration tests
     cmds:
-      - echo "Running integration tests..."
       - go test -v -race ./tests/integration/...
 
   coverage:
-    desc: Generate test coverage report
-    deps:
-      - test-unit
+    desc: Generate HTML coverage report
+    deps: [test-unit]
     cmds:
-      - echo "Generating coverage report..."
       - go tool cover -html={{.COVERAGE_FILE}} -o {{.COVERAGE_HTML}}
-      - echo "Coverage report generated{{":"}} {{.COVERAGE_HTML}}"
+      - echo "Coverage report{{":"}} {{.COVERAGE_HTML}}"
 
   clean:
-    desc: Clean build artifacts
+    desc: Remove build artifacts
     cmds:
-      - echo "Cleaning..."
       - rm -rf {{.BUILD_DIR}}/
       - rm -f {{.COVERAGE_FILE}} {{.COVERAGE_HTML}}
-
-  docker-build:
-    desc: Build Docker image
-    cmds:
-      - echo "Building Docker image..."
-      - docker-compose build
-
-  docker-up:
-    desc: Start services with Docker Compose
-    cmds:
-      - echo "Starting services..."
-      - docker-compose up -d
-
-  docker-down:
-    desc: Stop services with Docker Compose
-    cmds:
-      - echo "Stopping services..."
-      - docker-compose down
-
-  docker-logs:
-    desc: View Docker logs
-    cmds:
-      - docker-compose logs -f api
+      - rm -rf static/
+      - rm -f fullerhome.db
 
   lint:
     desc: Run linter
     preconditions:
       - sh: command -v golangci-lint
-        msg: "golangci-lint not installed. Install from https://golangci-lint.run/usage/install/"
+        msg: "golangci-lint not installed: https://golangci-lint.run/usage/install/"
     cmds:
-      - echo "Running linter..."
       - golangci-lint run ./...
 
   deps:
-    desc: Download dependencies
+    desc: Install/tidy all dependencies
     cmds:
-      - echo "Downloading dependencies..."
       - go mod download
       - go mod tidy
+      - cd web && npm install

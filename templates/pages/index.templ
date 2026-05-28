@@ -1,0 +1,78 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/mtfuller/fullerhome/internal/domain"
+	"github.com/mtfuller/fullerhome/templates"
+)
+
+templ Index(levels []domain.SpatialLevel) {
+	@templates.Layout("Dashboard") {
+		<main>
+			<style>
+				h2 { color: var(--sage); margin-bottom: 1.25rem; }
+				.level-grid {
+					display: grid;
+					grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+					gap: 1rem;
+				}
+				.level-card {
+					background: var(--white);
+					border: 1px solid var(--border);
+					border-radius: 8px;
+					padding: 1.25rem;
+					transition: box-shadow 0.15s;
+					text-decoration: none;
+					color: inherit;
+					display: block;
+				}
+				.level-card:hover { box-shadow: 0 2px 12px rgba(60,98,85,0.12); }
+				.level-card h3 { color: var(--sage); margin-bottom: 0.25rem; }
+				.level-type {
+					font-family: sans-serif;
+					font-size: 0.8rem;
+					color: #888;
+					text-transform: uppercase;
+					letter-spacing: 0.06em;
+				}
+				.level-badge {
+					display: inline-block;
+					margin-top: 0.75rem;
+					padding: 0.2rem 0.6rem;
+					border-radius: 4px;
+					font-family: sans-serif;
+					font-size: 0.75rem;
+					font-weight: 600;
+					background: var(--terracotta);
+					color: #fff;
+				}
+				.empty-state {
+					font-family: sans-serif;
+					color: #888;
+					padding: 2rem;
+					text-align: center;
+					border: 1px dashed var(--border);
+					border-radius: 8px;
+				}
+			</style>
+			<h2>Spatial Levels</h2>
+			if len(levels) == 0 {
+				<div class="empty-state">
+					<p>No levels configured yet.</p>
+					<p style="margin-top:0.5rem;font-size:0.85rem">Use POST /api/v1/levels to add your first spatial level.</p>
+				</div>
+			} else {
+				<div class="level-grid">
+					for _, level := range levels {
+						<a href={ templ.SafeURL(fmt.Sprintf("/spatial?level=%s", level.ID)) } class="level-card">
+							<h3>{ level.Name }</h3>
+							<span class="level-type">{ string(level.Type) }</span>
+							<br/>
+							<span class="level-badge">Level { fmt.Sprintf("%d", level.OrderIndex) }</span>
+						</a>
+					}
+				</div>
+			}
+		</main>
+	}
+}

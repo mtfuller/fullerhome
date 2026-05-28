@@ -1,68 +1,75 @@
 package database
 
 import (
+	"database/sql"
 	"fmt"
-	"time"
 
-	"github.com/mtfuller/starterpack-go-gin/internal/config"
-	"github.com/mtfuller/starterpack-go-gin/pkg/logger"
-	"github.com/sirupsen/logrus"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	gormLogger "gorm.io/gorm/logger"
+	_ "modernc.org/sqlite"
 )
 
-// DB wraps the gorm database connection
+// DB wraps the sql.DB connection for SQLite.
 type DB struct {
-	*gorm.DB
+	*sql.DB
 }
 
-// New creates a new database connection
-func New(cfg *config.DatabaseConfig, log *logger.Logger) (*DB, error) {
-	dsn := cfg.GetDSN()
-
-	// Configure GORM logger
-	gormLog := gormLogger.Default.LogMode(gormLogger.Silent)
-	if log.Logger.GetLevel() == logrus.DebugLevel {
-		gormLog = gormLogger.Default.LogMode(gormLogger.Info)
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: gormLog,
-	})
+// Open opens (or creates) the SQLite database at path and enables WAL mode.
+func Open(path string) (*DB, error) {
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get database instance: %w", err)
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		return nil, fmt.Errorf("enable WAL: %w", err)
 	}
-
-	// Set connection pool settings
-	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetMaxOpenConns(100)
-	sqlDB.SetConnMaxLifetime(time.Hour)
-
-	log.Info("Database connection established")
+	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
 
 	return &DB{db}, nil
 }
 
-// Close closes the database connection
-func (db *DB) Close() error {
-	sqlDB, err := db.DB.DB()
-	if err != nil {
-		return err
+// Migrate runs schema migrations idempotently.
+func Migrate(db *DB) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS spatial_levels (
+			id          TEXT PRIMARY KEY,
+			name        TEXT NOT NULL,
+			type        TEXT NOT NULL,
+			order_index INTEGER NOT NULL DEFAULT 0,
+			walls_json  TEXT NOT NULL DEFAULT '[]',
+			created_by  TEXT NOT NULL DEFAULT '',
+			updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS asset_markers (
+			id           TEXT PRIMARY KEY,
+			level_id     TEXT NOT NULL REFERENCES spatial_levels(id) ON DELETE CASCADE,
+			label        TEXT NOT NULL,
+			category     TEXT NOT NULL,
+			x_coordinate REAL NOT NULL DEFAULT 0,
+			y_coordinate REAL NOT NULL DEFAULT 0,
+			notes        TEXT NOT NULL DEFAULT '',
+			updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS sensor_telemetry (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			marker_id    TEXT NOT NULL REFERENCES asset_markers(id) ON DELETE CASCADE,
+			temperature  REAL NOT NULL DEFAULT 0,
+			humidity     REAL NOT NULL DEFAULT 0,
+			water_leaked INTEGER NOT NULL DEFAULT 0,
+			timestamp    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
-	return sqlDB.Close()
+
+	for _, stmt := range statements {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
+	return nil
 }
 
-// Ping checks if the database is reachable
+// Ping checks database reachability.
 func (db *DB) Ping() error {
-	sqlDB, err := db.DB.DB()
-	if err != nil {
-		return err
-	}
-	return sqlDB.Ping()
+	return db.DB.Ping()
 }

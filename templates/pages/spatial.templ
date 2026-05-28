@@ -1,0 +1,94 @@
+package pages
+
+import (
+	"encoding/json"
+	"github.com/mtfuller/fullerhome/internal/domain"
+	"github.com/mtfuller/fullerhome/templates"
+)
+
+// SpatialState is the data blob hydrated into the React canvas root.
+type SpatialState struct {
+	Levels  []domain.SpatialLevel  `json:"levels"`
+	Markers []domain.AssetMarker   `json:"markers"`
+}
+
+templ Spatial(levels []domain.SpatialLevel, markers []domain.AssetMarker) {
+	@templates.Layout("Spatial Map") {
+		<style>
+			.spatial-layout {
+				display: flex;
+				height: calc(100vh - 104px);
+			}
+			.sidebar {
+				width: 220px;
+				background: var(--white);
+				border-right: 1px solid var(--border);
+				padding: 1rem;
+				overflow-y: auto;
+				flex-shrink: 0;
+			}
+			.sidebar-title {
+				color: var(--sage);
+				font-family: sans-serif;
+				font-size: 0.75rem;
+				text-transform: uppercase;
+				letter-spacing: 0.08em;
+				margin-bottom: 0.75rem;
+			}
+			.level-btn {
+				display: block;
+				width: 100%;
+				text-align: left;
+				padding: 0.6rem 0.75rem;
+				margin-bottom: 0.4rem;
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				background: var(--white);
+				cursor: pointer;
+				font-family: sans-serif;
+				font-size: 0.85rem;
+				color: var(--text);
+				transition: background 0.12s, color 0.12s;
+			}
+			.level-btn:hover { background: var(--sage); color: #fff; border-color: var(--sage); }
+			.canvas-area {
+				flex: 1;
+				position: relative;
+				overflow: hidden;
+			}
+			#interactive-canvas-root {
+				width: 100%;
+				height: 100%;
+				background:
+					repeating-linear-gradient(0deg, transparent, transparent 39px, var(--border) 40px),
+					repeating-linear-gradient(90deg, transparent, transparent 39px, var(--border) 40px);
+			}
+		</style>
+		<div class="spatial-layout">
+			<aside class="sidebar">
+				<p class="sidebar-title">Levels</p>
+				for _, level := range levels {
+					<button class="level-btn" data-level-id={ level.ID.String() }>
+						{ level.Name }
+					</button>
+				}
+			</aside>
+			<div class="canvas-area">
+				<div
+					id="interactive-canvas-root"
+					data-state={ stateJSON(levels, markers) }
+				></div>
+			</div>
+		</div>
+		<script src="/static/main.js" defer></script>
+	}
+}
+
+func stateJSON(levels []domain.SpatialLevel, markers []domain.AssetMarker) string {
+	state := SpatialState{Levels: levels, Markers: markers}
+	if markers == nil {
+		state.Markers = []domain.AssetMarker{}
+	}
+	b, _ := json.Marshal(state)
+	return string(b)
+}

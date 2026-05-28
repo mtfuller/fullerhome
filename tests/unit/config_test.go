@@ -1,53 +1,39 @@
-package unit
+package unit_test
 
 import (
 	"os"
 	"testing"
 
-	"github.com/mtfuller/starterpack-go-gin/internal/config"
+	"github.com/mtfuller/fullerhome/internal/config"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestLoadConfig(t *testing.T) {
-	// Test default values
-	cfg, err := config.Load()
-	assert.NoError(t, err)
-	assert.NotNil(t, cfg)
-	assert.Equal(t, "8080", cfg.Server.Port)
-	assert.Equal(t, "development", cfg.Server.Mode)
-	assert.Equal(t, "localhost", cfg.Database.Host)
-	assert.Equal(t, 5432, cfg.Database.Port)
+func TestConfig_Defaults(t *testing.T) {
+	cfg := config.Load()
+	assert.Equal(t, "8080", cfg.ServerPort)
+	assert.Equal(t, "./fullerhome.db", cfg.DatabasePath)
+	assert.Equal(t, "info", cfg.LogLevel)
+	assert.Equal(t, "./static", cfg.StaticDir)
 }
 
-func TestLoadConfigWithEnv(t *testing.T) {
-	// Set environment variables
-	os.Setenv("SERVER_PORT", "9090")
-	os.Setenv("DB_HOST", "testhost")
-	os.Setenv("LOG_LEVEL", "debug")
-	defer func() {
-		os.Unsetenv("SERVER_PORT")
-		os.Unsetenv("DB_HOST")
-		os.Unsetenv("LOG_LEVEL")
-	}()
+func TestConfig_EnvOverrides(t *testing.T) {
+	t.Setenv("SERVER_PORT", "9090")
+	t.Setenv("DATABASE_PATH", "/tmp/test.db")
+	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("STATIC_DIR", "/tmp/static")
 
-	cfg, err := config.Load()
-	assert.NoError(t, err)
-	assert.Equal(t, "9090", cfg.Server.Port)
-	assert.Equal(t, "testhost", cfg.Database.Host)
-	assert.Equal(t, "debug", cfg.Log.Level)
+	cfg := config.Load()
+	assert.Equal(t, "9090", cfg.ServerPort)
+	assert.Equal(t, "/tmp/test.db", cfg.DatabasePath)
+	assert.Equal(t, "debug", cfg.LogLevel)
+	assert.Equal(t, "/tmp/static", cfg.StaticDir)
 }
 
-func TestDatabaseDSN(t *testing.T) {
-	dbConfig := &config.DatabaseConfig{
-		Host:     "localhost",
-		Port:     5432,
-		User:     "testuser",
-		Password: "testpass",
-		DBName:   "testdb",
-		SSLMode:  "disable",
-	}
+func TestConfig_PartialOverride(t *testing.T) {
+	os.Unsetenv("SERVER_PORT")
+	t.Setenv("LOG_LEVEL", "debug")
 
-	dsn := dbConfig.GetDSN()
-	expected := "host=localhost port=5432 user=testuser password=testpass dbname=testdb sslmode=disable"
-	assert.Equal(t, expected, dsn)
+	cfg := config.Load()
+	assert.Equal(t, "8080", cfg.ServerPort)
+	assert.Equal(t, "debug", cfg.LogLevel)
 }
