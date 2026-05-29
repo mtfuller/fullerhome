@@ -410,14 +410,15 @@ function App({ initialState }: { initialState: HomeMapState }) {
   async function handleMoveLevel(id: string, dir: 'up' | 'down') {
     const sorted = [...levels].sort((a, b) => a.order_index - b.order_index)
     const idx = sorted.findIndex(l => l.id === id)
+    if (idx === -1) return
     const swapIdx = dir === 'up' ? idx - 1 : idx + 1
     if (swapIdx < 0 || swapIdx >= sorted.length) return
     const a = sorted[idx]
     const b = sorted[swapIdx]
-    const aNew = b.order_index === a.order_index
-      ? (dir === 'up' ? a.order_index - 1 : a.order_index + 1)
-      : b.order_index
-    const bNew = a.order_index
+    // Use positional indexes so the two slots always get distinct values,
+    // even when they currently share an order_index.
+    const aNew = swapIdx
+    const bNew = idx
     try {
       await api.reorderLevel(a.id, aNew)
       await api.reorderLevel(b.id, bNew)

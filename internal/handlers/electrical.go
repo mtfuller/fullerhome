@@ -539,7 +539,7 @@ var electricalTmpl = template.Must(template.New("electrical").Parse(`<!DOCTYPE h
     <a href="/electrical">Electrical</a>
   </nav>
   <div id="electrical-root" data-state="{{.StateJSON}}"></div>
-  <script src="/static/breaker.js" defer></script>
+  <script type="module" src="/static/breaker.js"></script>
 </body>
 </html>`))
 
