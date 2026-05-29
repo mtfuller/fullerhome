@@ -82,6 +82,10 @@ func Migrate(db *DB) error {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
+
+	// Additive column migrations — tolerate "duplicate column" errors on re-run
+	_, _ = db.Exec(`ALTER TABLE spatial_levels ADD COLUMN map_config_json TEXT NOT NULL DEFAULT ''`)
+
 	return nil
 }
 

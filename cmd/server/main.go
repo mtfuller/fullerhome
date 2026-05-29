@@ -54,6 +54,8 @@ func main() {
 	r.Get("/home-map", homeMap.HomeMap)
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Get("/geocode", homeMap.Geocode)
+
 		r.Get("/levels", homeMap.ListLevels)
 		r.Post("/levels", homeMap.CreateLevel)
 		r.Put("/levels/{levelID}", homeMap.UpdateLevel)
