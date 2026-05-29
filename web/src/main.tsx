@@ -28,11 +28,12 @@ const api = {
     return r.json()
   },
   async reorderLevel(id: string, orderIndex: number) {
-    await fetch(`/api/v1/levels/${id}/reorder`, {
+    const r = await fetch(`/api/v1/levels/${id}/reorder`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ order_index: orderIndex }),
     })
+    if (!r.ok) throw new Error(`reorder failed: ${r.status}`)
   },
   async deleteLevel(id: string) {
     await fetch(`/api/v1/levels/${id}`, { method: 'DELETE' })
@@ -417,7 +418,13 @@ function App({ initialState }: { initialState: HomeMapState }) {
       ? (dir === 'up' ? a.order_index - 1 : a.order_index + 1)
       : b.order_index
     const bNew = a.order_index
-    await Promise.all([api.reorderLevel(a.id, aNew), api.reorderLevel(b.id, bNew)])
+    try {
+      await api.reorderLevel(a.id, aNew)
+      await api.reorderLevel(b.id, bNew)
+    } catch {
+      setSaveError('Reorder failed')
+      return
+    }
     setLevels(prev => prev.map(l =>
       l.id === a.id ? { ...l, order_index: aNew } :
       l.id === b.id ? { ...l, order_index: bNew } : l
