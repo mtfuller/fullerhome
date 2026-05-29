@@ -156,6 +156,53 @@ export function newId(): string {
   return crypto.randomUUID()
 }
 
+export type BreakerType = 'SINGLE' | 'DOUBLE' | 'GFCI' | 'AFCI' | 'TANDEM'
+
+export const BREAKER_TYPE_LABELS: Record<BreakerType, string> = {
+  SINGLE: 'Single (120V)',
+  DOUBLE: 'Double (240V)',
+  GFCI: 'GFCI (120V)',
+  AFCI: 'AFCI (120V)',
+  TANDEM: 'Tandem (2×120V)',
+}
+
+export interface BreakerPanel {
+  id: string
+  marker_id: string
+  total_slots: number
+  notes: string
+  updated_at: string
+  marker_label: string
+  level_id: string
+}
+
+export interface Circuit {
+  id: string
+  panel_id: string
+  slot_number: number
+  label: string
+  amperage: number
+  breaker_type: BreakerType
+  notes: string
+  updated_at: string
+}
+
+export interface CircuitConnection {
+  id: string
+  circuit_id: string
+  marker_id: string
+  notes: string
+  updated_at: string
+  marker_label: string
+  marker_category: MarkerCategory
+  level_id: string
+}
+
+export interface ElectricalState {
+  panels: BreakerPanel[]
+  markers: AssetMarker[]
+}
+
 export function parseWalls(json: string): WallSegment[] {
   try {
     const parsed = JSON.parse(json)

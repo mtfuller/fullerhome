@@ -7,9 +7,12 @@ export default defineConfig({
     outDir: '../static',
     emptyOutDir: true,
     rollupOptions: {
-      input: 'src/main.tsx',
+      input: {
+        main: 'src/main.tsx',
+        breaker: 'src/breaker.tsx',
+      },
       output: {
-        entryFileNames: 'main.js',
+        entryFileNames: '[name].js',
         chunkFileNames: '[name].js',
         assetFileNames: '[name].[ext]',
       },

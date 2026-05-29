@@ -75,6 +75,30 @@ func Migrate(db *DB) error {
 			water_leaked INTEGER NOT NULL DEFAULT 0,
 			timestamp    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS breaker_panels (
+			id          TEXT PRIMARY KEY,
+			marker_id   TEXT NOT NULL REFERENCES asset_markers(id) ON DELETE CASCADE,
+			total_slots INTEGER NOT NULL DEFAULT 20,
+			notes       TEXT NOT NULL DEFAULT '',
+			updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS circuits (
+			id           TEXT PRIMARY KEY,
+			panel_id     TEXT NOT NULL REFERENCES breaker_panels(id) ON DELETE CASCADE,
+			slot_number  INTEGER NOT NULL,
+			label        TEXT NOT NULL DEFAULT '',
+			amperage     INTEGER NOT NULL DEFAULT 15,
+			breaker_type TEXT NOT NULL DEFAULT 'SINGLE',
+			notes        TEXT NOT NULL DEFAULT '',
+			updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS circuit_connections (
+			id         TEXT PRIMARY KEY,
+			circuit_id TEXT NOT NULL REFERENCES circuits(id) ON DELETE CASCADE,
+			marker_id  TEXT NOT NULL REFERENCES asset_markers(id) ON DELETE CASCADE,
+			notes      TEXT NOT NULL DEFAULT '',
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 
 	for _, stmt := range statements {

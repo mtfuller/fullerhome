@@ -41,6 +41,7 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
   <nav>
     <a href="/">Dashboard</a>
     <a href="/home-map">Home Map</a>
+    <a href="/electrical">Electrical</a>
   </nav>
   <main>
     <h2>Home Levels</h2>
@@ -87,6 +88,7 @@ var homeMapTmpl = template.Must(template.New("homemap").Parse(`<!DOCTYPE html>
   <nav>
     <a href="/">Dashboard</a>
     <a href="/home-map">Home Map</a>
+    <a href="/electrical">Electrical</a>
   </nav>
   <div id="home-map-root" data-state="{{.StateJSON}}"></div>
   <script src="/static/main.js" defer></script>
