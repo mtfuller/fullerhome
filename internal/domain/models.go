@@ -39,13 +39,14 @@ const (
 
 // HomeLevel represents a single physical layer of the home.
 type HomeLevel struct {
-	ID         uuid.UUID `json:"id"`
-	Name       string    `json:"name"`
-	Type       LevelType `json:"type"`
-	OrderIndex int       `json:"order_index"`
-	WallsJSON  string    `json:"walls_json"`
-	CreatedBy  string    `json:"created_by"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID             uuid.UUID `json:"id"`
+	Name           string    `json:"name"`
+	Type           LevelType `json:"type"`
+	OrderIndex     int       `json:"order_index"`
+	WallsJSON      string    `json:"walls_json"`
+	MapConfigJSON  string    `json:"map_config_json"`
+	CreatedBy      string    `json:"created_by"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // Room represents a named area on a level (e.g. "Kitchen", "Master Bedroom").
@@ -111,9 +112,10 @@ type CreateLevelRequest struct {
 }
 
 type UpdateLevelRequest struct {
-	Name      string    `json:"name"`
-	Type      LevelType `json:"type"`
-	WallsJSON string    `json:"walls_json"`
+	Name          string    `json:"name"`
+	Type          LevelType `json:"type"`
+	WallsJSON     string    `json:"walls_json"`
+	MapConfigJSON string    `json:"map_config_json"`
 }
 
 type CreateMarkerRequest struct {

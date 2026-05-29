@@ -1,7 +1,7 @@
 import { StrictMode, useState, useCallback, useRef, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { HomeMapCanvas, type EditMode, type Selection, type GhostLevel } from './HomeMapCanvas'
-import type { HomeLevel, AssetMarker, Room, Zone, WallSegment, MarkerCategory, ZoneType, HomeMapState, Point } from './types'
+import type { HomeLevel, AssetMarker, Room, Zone, WallSegment, MarkerCategory, ZoneType, HomeMapState, Point, MapConfig } from './types'
 import {
   PALETTE, LEVEL_TYPE_LABELS, MARKER_CATEGORY_LABELS, MARKER_CATEGORY_COLOURS,
   ZONE_TYPE_LABELS, ZONE_TYPE_COLOURS,
@@ -19,11 +19,11 @@ const api = {
     })
     return r.json()
   },
-  async updateLevel(id: string, name: string, type: string, wallsJson: string): Promise<HomeLevel> {
+  async updateLevel(id: string, name: string, type: string, wallsJson: string, mapConfigJson = ''): Promise<HomeLevel> {
     const r = await fetch(`/api/v1/levels/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, type, walls_json: wallsJson }),
+      body: JSON.stringify({ name, type, walls_json: wallsJson, map_config_json: mapConfigJson }),
     })
     return r.json()
   },
@@ -243,6 +243,28 @@ function App({ initialState }: { initialState: HomeMapState }) {
   const [addLevelDialog, setAddLevelDialog] = useState(false)
   const [renameLevelDialog, setRenameLevelDialog] = useState(false)
 
+  // Map background state (satellite tiles per level)
+  const [mapConfigs, setMapConfigs] = useState<Record<string, MapConfig | null>>(() => {
+    const m: Record<string, MapConfig | null> = {}
+    for (const lvl of initialState.levels) {
+      try { m[lvl.id] = lvl.map_config_json ? JSON.parse(lvl.map_config_json) : null } catch { m[lvl.id] = null }
+    }
+    return m
+  })
+  const [showMapPanel, setShowMapPanel] = useState(false)
+  const [mapAddress, setMapAddress] = useState('')
+  const [mapZoom, setMapZoom] = useState(18)
+  const [mapOpacity, setMapOpacity] = useState(0.6)
+  const [geocoding, setGeocoding] = useState(false)
+  const [geocodeError, setGeocodeError] = useState<string | null>(null)
+
+  // Keep panel fields in sync with the active level's config
+  useEffect(() => {
+    if (!activeLevelId) return
+    const cfg = mapConfigs[activeLevelId]
+    if (cfg) { setMapZoom(cfg.zoom); setMapOpacity(cfg.opacity) }
+  }, [activeLevelId]) // eslint-disable-line
+
   // Save state
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -259,7 +281,9 @@ function App({ initialState }: { initialState: HomeMapState }) {
     setSaveError(null)
     try {
       const wallsJson = JSON.stringify(allWalls[activeLevelId] ?? [])
-      await api.updateLevel(activeLevelId, activeLevel.name, activeLevel.type, wallsJson)
+      const cfg = mapConfigs[activeLevelId]
+      const mapConfigJson = cfg ? JSON.stringify(cfg) : ''
+      await api.updateLevel(activeLevelId, activeLevel.name, activeLevel.type, wallsJson, mapConfigJson)
     } catch (_err) {
       setSaveError('Save failed')
     } finally {
@@ -317,6 +341,36 @@ function App({ initialState }: { initialState: HomeMapState }) {
     setAllRooms(prev => prev.filter(r => r.id !== id))
     api.deleteRoom(activeLevelId, id).catch(() => setSaveError('Delete failed'))
   }, [activeLevelId])
+
+  // Map background
+  async function handleGeocode() {
+    if (!mapAddress.trim() || !activeLevelId) return
+    setGeocoding(true)
+    setGeocodeError(null)
+    try {
+      const r = await fetch(`/api/v1/geocode?q=${encodeURIComponent(mapAddress.trim())}`)
+      if (!r.ok) { setGeocodeError('Address not found'); return }
+      const { lat, lon } = await r.json()
+      const cfg: MapConfig = { lat, lon, zoom: mapZoom, opacity: mapOpacity }
+      setMapConfigs(prev => ({ ...prev, [activeLevelId]: cfg }))
+      scheduleAutoSave()
+    } catch { setGeocodeError('Geocoding failed') } finally { setGeocoding(false) }
+  }
+
+  function handleClearMapBg() {
+    if (!activeLevelId) return
+    setMapConfigs(prev => ({ ...prev, [activeLevelId]: null }))
+    scheduleAutoSave()
+  }
+
+  function handleMapConfigChange(partial: Partial<MapConfig>) {
+    if (!activeLevelId) return
+    setMapConfigs(prev => {
+      const existing = prev[activeLevelId] ?? { lat: 0, lon: 0, zoom: mapZoom, opacity: mapOpacity }
+      return { ...prev, [activeLevelId]: { ...existing, ...partial } }
+    })
+    scheduleAutoSave()
+  }
 
   // Zone mutations
   const handleZoneCreate = useCallback((points: Point[], type: ZoneType, name: string) => {
@@ -470,6 +524,12 @@ function App({ initialState }: { initialState: HomeMapState }) {
         <button onClick={undo} disabled={history.length === 0} title="Undo (Ctrl+Z)" style={btnStyle('ghost')}>↩ Undo</button>
         <button onClick={redo} disabled={future.length === 0} title="Redo (Ctrl+Y)" style={btnStyle('ghost')}>↪ Redo</button>
         <div style={{ width: 1, height: 24, background: PALETTE.border, margin: '0 4px' }} />
+        <button
+          onClick={() => setShowMapPanel(p => !p)}
+          title="Satellite background"
+          style={btnStyle(showMapPanel ? 'tool-active' : 'tool')}
+        >Map Bg</button>
+        <div style={{ width: 1, height: 24, background: PALETTE.border, margin: '0 4px' }} />
         <button onClick={saveActiveLevel} disabled={saving || !activeLevel} style={btnStyle('primary')}>
           {saving ? 'Saving…' : '💾 Save'}
         </button>
@@ -529,10 +589,7 @@ function App({ initialState }: { initialState: HomeMapState }) {
         </aside>
 
         {/* Canvas */}
-        <div style={{
-          flex: 1, position: 'relative', overflow: 'hidden',
-          background: `repeating-linear-gradient(0deg,transparent,transparent 39px,${PALETTE.border} 40px),repeating-linear-gradient(90deg,transparent,transparent 39px,${PALETTE.border} 40px),${PALETTE.bg}`,
-        }}>
+        <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: PALETTE.bg }}>
           {activeLevel ? (
             <HomeMapCanvas
               walls={walls}
@@ -543,6 +600,7 @@ function App({ initialState }: { initialState: HomeMapState }) {
               mode={mode}
               selectedCategory={selectedCategory}
               selectedZoneType={selectedZoneType}
+              mapConfig={activeLevelId ? (mapConfigs[activeLevelId] ?? null) : null}
               onWallsChange={handleWallsChange}
               onMarkerPlace={handleMarkerPlace}
               onMarkerMove={handleMarkerMove}
@@ -576,6 +634,73 @@ function App({ initialState }: { initialState: HomeMapState }) {
             {mode === 'room' && 'Click to place a room label'}
             {mode === 'marker' && `Click to place ${MARKER_CATEGORY_LABELS[selectedCategory]} marker`}
           </div>
+
+          {/* Satellite map background panel */}
+          {showMapPanel && activeLevelId && (
+            <div style={{
+              position: 'absolute', top: 8, right: 8,
+              background: '#fff', border: `1px solid ${PALETTE.border}`, borderRadius: 8,
+              padding: '1rem', width: 260, boxShadow: '0 4px 16px rgba(0,0,0,0.10)',
+              fontFamily: 'sans-serif', fontSize: 12, zIndex: 10,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                <span style={{ fontWeight: 600, color: PALETTE.sage, fontSize: 13 }}>Satellite Background</span>
+                <button onClick={() => setShowMapPanel(false)} style={{ ...btnStyle('ghost'), padding: '0.1rem 0.4rem', fontSize: 14, lineHeight: 1 }}>×</button>
+              </div>
+
+              <label style={{ display: 'block', color: '#888', marginBottom: 3 }}>Address or place name</label>
+              <div style={{ display: 'flex', gap: 4, marginBottom: '0.6rem' }}>
+                <input
+                  type="text"
+                  placeholder="e.g. 123 Main St, Springfield"
+                  value={mapAddress}
+                  onChange={e => setMapAddress(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleGeocode()}
+                  style={{ flex: 1, padding: '0.3rem 0.5rem', border: `1px solid ${PALETTE.border}`, borderRadius: 4, fontSize: 12, outline: 'none' }}
+                />
+                <button onClick={handleGeocode} disabled={geocoding || !mapAddress.trim()} style={btnStyle('primary')}>
+                  {geocoding ? '…' : 'Find'}
+                </button>
+              </div>
+              {geocodeError && <p style={{ color: '#dc2626', margin: '0 0 0.5rem', fontSize: 11 }}>{geocodeError}</p>}
+
+              <label style={{ display: 'block', color: '#888', marginBottom: 3 }}>
+                Zoom level ({mapZoom})
+                <span style={{ float: 'right', color: '#bbb' }}>14 – 21</span>
+              </label>
+              <input
+                type="range" min={14} max={21} value={mapZoom}
+                onChange={e => {
+                  const z = Number(e.target.value)
+                  setMapZoom(z)
+                  handleMapConfigChange({ zoom: z })
+                }}
+                style={{ width: '100%', marginBottom: '0.6rem' }}
+              />
+
+              <label style={{ display: 'block', color: '#888', marginBottom: 3 }}>
+                Opacity ({Math.round(mapOpacity * 100)}%)
+              </label>
+              <input
+                type="range" min={10} max={100} value={Math.round(mapOpacity * 100)}
+                onChange={e => {
+                  const op = Number(e.target.value) / 100
+                  setMapOpacity(op)
+                  handleMapConfigChange({ opacity: op })
+                }}
+                style={{ width: '100%', marginBottom: '0.75rem' }}
+              />
+
+              {mapConfigs[activeLevelId] && (
+                <button onClick={handleClearMapBg} style={{ ...btnStyle('danger'), width: '100%', textAlign: 'center' }}>
+                  Clear Background
+                </button>
+              )}
+              <p style={{ color: '#bbb', fontSize: 10, margin: '0.5rem 0 0', lineHeight: 1.4 }}>
+                Imagery © Esri. Changes save with the level.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Properties Panel */}
@@ -658,6 +783,7 @@ function App({ initialState }: { initialState: HomeMapState }) {
             const lvl = await api.createLevel(vals.name || 'New Level', vals.type || 'GROUND')
             setLevels(prev => [...prev, lvl])
             setAllWalls(w => ({ ...w, [lvl.id]: [] }))
+            setMapConfigs(m => ({ ...m, [lvl.id]: null }))
             setActiveLevelId(lvl.id)
           }}
           onCancel={() => setAddLevelDialog(false)}

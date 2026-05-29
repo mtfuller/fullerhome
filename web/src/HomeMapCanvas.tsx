@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import type { WallSegment, AssetMarker, Room, Zone, Point, MarkerCategory, ZoneType } from './types'
+import type { WallSegment, AssetMarker, Room, Zone, Point, MarkerCategory, ZoneType, MapConfig } from './types'
 import { PALETTE, MARKER_CATEGORY_COLOURS, MARKER_CATEGORY_ABBREV, ZONE_TYPE_COLOURS, ZONE_TYPE_LABELS, newId } from './types'
 
 export type EditMode = 'select' | 'draw' | 'room' | 'marker' | 'zone'
@@ -29,6 +29,7 @@ interface Props {
   mode: EditMode
   selectedCategory: MarkerCategory
   selectedZoneType: ZoneType
+  mapConfig: MapConfig | null
   onWallsChange: (walls: WallSegment[]) => void
   onMarkerPlace: (x: number, y: number) => void
   onMarkerMove: (id: string, x: number, y: number) => void
@@ -48,7 +49,8 @@ const SNAP_PX = 14
 const LINE_HIT = 6
 const FONT_VERTEX = '12px sans-serif'
 const FONT_LABEL = '11px sans-serif'
-const FONT_ROOM = 'italic 13px Georgia, serif'
+const FONT_ROOM = '500 12px system-ui, -apple-system, sans-serif'
+const GRID_PX = 40
 
 const MIN_SCALE = 0.15
 const MAX_SCALE = 10
@@ -132,7 +134,7 @@ function drawWalls(ctx: CanvasRenderingContext2D, walls: WallSegment[], W: numbe
 }
 
 export function HomeMapCanvas({
-  walls, markers, rooms, zones, ghostLevels, mode, selectedCategory, selectedZoneType,
+  walls, markers, rooms, zones, ghostLevels, mode, selectedCategory, selectedZoneType, mapConfig,
   onWallsChange, onMarkerPlace, onMarkerMove, onMarkerDelete,
   onRoomPlace, onRoomMove, onRoomDelete,
   onZoneCreate, onZoneDelete,
@@ -150,6 +152,7 @@ export function HomeMapCanvas({
   const selRef = useRef(selection)
   const catRef = useRef(selectedCategory)
   const zoneTypeRef = useRef(selectedZoneType)
+  const mapConfigRef = useRef(mapConfig)
   wallsRef.current = walls
   markersRef.current = markers
   roomsRef.current = rooms
@@ -159,6 +162,10 @@ export function HomeMapCanvas({
   selRef.current = selection
   catRef.current = selectedCategory
   zoneTypeRef.current = selectedZoneType
+  mapConfigRef.current = mapConfig
+
+  // Tile image cache for satellite background
+  const tileCache = useRef(new Map<string, HTMLImageElement | 'loading' | 'error'>())
 
   // Mutable drawing state (no re-renders during mouse move)
   const drawing = useRef({ active: false, points: [] as Point[], cursor: null as Point | null, snap: null as Point | null })
@@ -218,6 +225,61 @@ export function HomeMapCanvas({
     const sel = selRef.current
     const dr = drawing.current
 
+    // Visible bounds in content space (for grid culling)
+    const visLeft = -vp.x / vp.scale
+    const visTop = -vp.y / vp.scale
+    const visRight = (W - vp.x) / vp.scale
+    const visBottom = (H - vp.y) / vp.scale
+
+    // Grid — drawn in content space so it pans and zooms with the world
+    {
+      const g0x = Math.floor(visLeft / GRID_PX) * GRID_PX
+      const g0y = Math.floor(visTop / GRID_PX) * GRID_PX
+      ctx.strokeStyle = 'rgba(180,170,160,0.22)'
+      ctx.lineWidth = 0.5
+      for (let gx = g0x; gx <= visRight; gx += GRID_PX) {
+        ctx.beginPath(); ctx.moveTo(gx, visTop); ctx.lineTo(gx, visBottom); ctx.stroke()
+      }
+      for (let gy = g0y; gy <= visBottom; gy += GRID_PX) {
+        ctx.beginPath(); ctx.moveTo(visLeft, gy); ctx.lineTo(visRight, gy); ctx.stroke()
+      }
+    }
+
+    // Satellite tile background
+    const cfg = mapConfigRef.current
+    if (cfg) {
+      const z = cfg.zoom
+      const worldSize = 256 * Math.pow(2, z)
+      const cwx = (cfg.lon + 180) / 360 * worldSize
+      const cwy = (1 - Math.log(Math.tan(cfg.lat * Math.PI / 180) + 1 / Math.cos(cfg.lat * Math.PI / 180)) / Math.PI) / 2 * worldSize
+      const txMin = Math.floor((cwx - W / 2) / 256)
+      const txMax = Math.floor((cwx + W / 2) / 256)
+      const tyMin = Math.floor((cwy - H / 2) / 256)
+      const tyMax = Math.floor((cwy + H / 2) / 256)
+      const maxTile = Math.pow(2, z) - 1
+      ctx.globalAlpha = cfg.opacity
+      for (let ty = tyMin; ty <= tyMax; ty++) {
+        for (let tx = txMin; tx <= txMax; tx++) {
+          if (tx < 0 || tx > maxTile || ty < 0 || ty > maxTile) continue
+          const tileCanvasX = W / 2 + tx * 256 - cwx
+          const tileCanvasY = H / 2 + ty * 256 - cwy
+          const tileUrl = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${ty}/${tx}`
+          const cached = tileCache.current.get(tileUrl)
+          if (!cached) {
+            tileCache.current.set(tileUrl, 'loading')
+            const img = new Image()
+            img.crossOrigin = 'anonymous'
+            img.onload = () => { tileCache.current.set(tileUrl, img); draw() }
+            img.onerror = () => tileCache.current.set(tileUrl, 'error')
+            img.src = tileUrl
+          } else if (cached !== 'loading' && cached !== 'error') {
+            ctx.drawImage(cached, tileCanvasX, tileCanvasY, 256, 256)
+          }
+        }
+      }
+      ctx.globalAlpha = 1
+    }
+
     // Ghost levels (other floors at low opacity)
     ctx.globalAlpha = 0.18
     ghosts.forEach(ghost => {
@@ -256,22 +318,25 @@ export function HomeMapCanvas({
       })
     }
 
-    // Room labels
+    // Room labels — clean pill badge, sans-serif, no shadow
     rs.forEach(room => {
       const rx = toPx(room.x_coordinate, W), ry = toPx(room.y_coordinate, H)
       const isSel = sel.kind === 'room' && sel.roomId === room.id
       ctx.font = FONT_ROOM
-      const tw = ctx.measureText(room.name).width + 14
+      const tw = ctx.measureText(room.name).width + 18
       const th = 22
-      roundRect(ctx, rx - tw / 2, ry - th / 2, tw, th, 4)
-      ctx.fillStyle = isSel ? PALETTE.sageLight : 'rgba(255,255,255,0.88)'
+      const r = th / 2  // pill radius
+      roundRect(ctx, rx - tw / 2, ry - th / 2, tw, th, r)
+      ctx.fillStyle = isSel ? PALETTE.sageLight : '#fff'
       ctx.fill()
-      ctx.strokeStyle = isSel ? PALETTE.sage : PALETTE.border
-      ctx.lineWidth = 1
-      ctx.stroke()
+      if (isSel) {
+        ctx.strokeStyle = PALETTE.sage
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+      }
       ctx.fillStyle = PALETTE.sage
       ctx.textAlign = 'center'
-      ctx.fillText(room.name, rx, ry + 5)
+      ctx.fillText(room.name, rx, ry + 4)
     })
 
     // Markers
@@ -393,7 +458,7 @@ export function HomeMapCanvas({
     return () => obs.disconnect()
   }, [draw])
 
-  useEffect(() => { draw() }, [draw, walls, markers, rooms, zones, ghostLevels, selection, mode, selectedZoneType])
+  useEffect(() => { draw() }, [draw, walls, markers, rooms, zones, ghostLevels, selection, mode, selectedZoneType, mapConfig])
 
   // --- Hit testing ---
 
@@ -452,7 +517,7 @@ export function HomeMapCanvas({
     for (const room of roomsRef.current) {
       const rx = toPx(room.x_coordinate, W), ry = toPx(room.y_coordinate, H)
       ctx.font = FONT_ROOM
-      const tw = ctx.measureText(room.name).width + 14
+      const tw = ctx.measureText(room.name).width + 18
       if (Math.abs(px - rx) <= tw / 2 && Math.abs(py - ry) <= 11) return room.id
     }
     return null

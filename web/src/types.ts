@@ -38,12 +38,20 @@ export const MARKER_CATEGORY_COLOURS: Record<MarkerCategory, string> = {
   WINDOW: '#059669', UTILITY: '#a66c56', STORAGE: '#8b6344', BREAKER: '#dc2626',
 }
 
+export interface MapConfig {
+  lat: number
+  lon: number
+  zoom: number     // Web Mercator zoom (14–21)
+  opacity: number  // 0–1
+}
+
 export interface HomeLevel {
   id: string
   name: string
   type: LevelType
   order_index: number
   walls_json: string
+  map_config_json: string  // JSON-encoded MapConfig or empty string
   created_by: string
   updated_at: string
 }

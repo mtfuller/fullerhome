@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -132,8 +134,8 @@ func (h *HomeMapHandler) UpdateLevel(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	res, err := h.db.ExecContext(r.Context(),
-		`UPDATE spatial_levels SET name=?, type=?, walls_json=?, updated_at=? WHERE id=?`,
-		req.Name, string(req.Type), req.WallsJSON, now, levelID,
+		`UPDATE spatial_levels SET name=?, type=?, walls_json=?, map_config_json=?, updated_at=? WHERE id=?`,
+		req.Name, string(req.Type), req.WallsJSON, req.MapConfigJSON, now, levelID,
 	)
 	if err != nil {
 		h.internalError(w, "update level", err)
@@ -494,11 +496,58 @@ func (h *HomeMapHandler) DeleteZone(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Geocode handles GET /api/v1/geocode?q={address} — proxies Nominatim so the
+// browser doesn't need a CORS workaround and we can set a proper User-Agent.
+func (h *HomeMapHandler) Geocode(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		writeError(w, http.StatusBadRequest, "q parameter required")
+		return
+	}
+
+	nominatimURL := "https://nominatim.openstreetmap.org/search?q=" + url.QueryEscape(q) + "&format=json&limit=1"
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, nominatimURL, nil)
+	if err != nil {
+		h.internalError(w, "geocode build request", err)
+		return
+	}
+	req.Header.Set("User-Agent", "FullerHome/1.0 (household-management; contact: admin@fullerhome.local)")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.internalError(w, "geocode fetch", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var results []struct {
+		Lat         string `json:"lat"`
+		Lon         string `json:"lon"`
+		DisplayName string `json:"display_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		h.internalError(w, "geocode parse", err)
+		return
+	}
+	if len(results) == 0 {
+		writeError(w, http.StatusNotFound, "address not found")
+		return
+	}
+
+	lat, _ := strconv.ParseFloat(results[0].Lat, 64)
+	lon, _ := strconv.ParseFloat(results[0].Lon, 64)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"lat":          lat,
+		"lon":          lon,
+		"display_name": results[0].DisplayName,
+	})
+}
+
 // --- helpers ---
 
 func (h *HomeMapHandler) queryLevels(r *http.Request) ([]domain.HomeLevel, error) {
 	rows, err := h.db.QueryContext(r.Context(),
-		`SELECT id, name, type, order_index, walls_json, created_by, updated_at
+		`SELECT id, name, type, order_index, walls_json, map_config_json, created_by, updated_at
 		 FROM spatial_levels ORDER BY order_index ASC`)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -512,7 +561,7 @@ func (h *HomeMapHandler) queryLevels(r *http.Request) ([]domain.HomeLevel, error
 	for rows.Next() {
 		var l domain.HomeLevel
 		var id string
-		if err := rows.Scan(&id, &l.Name, &l.Type, &l.OrderIndex, &l.WallsJSON, &l.CreatedBy, &l.UpdatedAt); err != nil {
+		if err := rows.Scan(&id, &l.Name, &l.Type, &l.OrderIndex, &l.WallsJSON, &l.MapConfigJSON, &l.CreatedBy, &l.UpdatedAt); err != nil {
 			return nil, err
 		}
 		l.ID = uuid.MustParse(id)
@@ -525,9 +574,9 @@ func (h *HomeMapHandler) queryLevel(r *http.Request, levelID string) (domain.Hom
 	var l domain.HomeLevel
 	var id string
 	err := h.db.QueryRowContext(r.Context(),
-		`SELECT id, name, type, order_index, walls_json, created_by, updated_at FROM spatial_levels WHERE id=?`,
+		`SELECT id, name, type, order_index, walls_json, map_config_json, created_by, updated_at FROM spatial_levels WHERE id=?`,
 		levelID,
-	).Scan(&id, &l.Name, &l.Type, &l.OrderIndex, &l.WallsJSON, &l.CreatedBy, &l.UpdatedAt)
+	).Scan(&id, &l.Name, &l.Type, &l.OrderIndex, &l.WallsJSON, &l.MapConfigJSON, &l.CreatedBy, &l.UpdatedAt)
 	if err != nil {
 		return l, err
 	}
