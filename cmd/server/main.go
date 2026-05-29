@@ -48,10 +48,12 @@ func main() {
 
 	health := handlers.NewHealthHandler(db)
 	homeMap := handlers.NewHomeMapHandler(db, logger)
+	electrical := handlers.NewElectricalHandler(db, logger)
 
 	r.Get("/health", health.Check)
 	r.Get("/", homeMap.Dashboard)
 	r.Get("/home-map", homeMap.HomeMap)
+	r.Get("/electrical", electrical.ElectricalPage)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/geocode", homeMap.Geocode)
@@ -76,6 +78,21 @@ func main() {
 		r.Post("/levels/{levelID}/zones", homeMap.CreateZone)
 		r.Put("/levels/{levelID}/zones/{zoneID}", homeMap.UpdateZone)
 		r.Delete("/levels/{levelID}/zones/{zoneID}", homeMap.DeleteZone)
+
+		r.Get("/breaker-panels", electrical.ListPanels)
+		r.Post("/breaker-panels", electrical.CreatePanel)
+		r.Get("/breaker-panels/{panelID}", electrical.GetPanel)
+		r.Put("/breaker-panels/{panelID}", electrical.UpdatePanel)
+		r.Delete("/breaker-panels/{panelID}", electrical.DeletePanel)
+
+		r.Get("/breaker-panels/{panelID}/circuits", electrical.ListCircuits)
+		r.Post("/breaker-panels/{panelID}/circuits", electrical.CreateCircuit)
+		r.Put("/circuits/{circuitID}", electrical.UpdateCircuit)
+		r.Delete("/circuits/{circuitID}", electrical.DeleteCircuit)
+
+		r.Get("/circuits/{circuitID}/connections", electrical.ListConnections)
+		r.Post("/circuits/{circuitID}/connections", electrical.CreateConnection)
+		r.Delete("/circuit-connections/{connectionID}", electrical.DeleteConnection)
 	})
 
 	srv := &http.Server{

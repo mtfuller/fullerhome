@@ -161,3 +161,81 @@ type UpdateRoomRequest struct {
 type ReorderLevelRequest struct {
 	OrderIndex int `json:"order_index"`
 }
+
+// BreakerType describes the kind of breaker occupying a panel slot.
+type BreakerType string
+
+const (
+	BreakerSingle BreakerType = "SINGLE" // 120V, 1 slot
+	BreakerDouble BreakerType = "DOUBLE" // 240V, 2 slots (occupies two consecutive slots)
+	BreakerGFCI   BreakerType = "GFCI"  // 120V GFCI
+	BreakerAFCI   BreakerType = "AFCI"  // 120V AFCI
+	BreakerTandem BreakerType = "TANDEM" // 2×120V, 1 physical slot
+)
+
+// BreakerPanel represents the configuration of a breaker box linked to a BREAKER asset marker.
+type BreakerPanel struct {
+	ID          uuid.UUID `json:"id"`
+	MarkerID    uuid.UUID `json:"marker_id"`
+	TotalSlots  int       `json:"total_slots"`
+	Notes       string    `json:"notes"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	MarkerLabel string    `json:"marker_label"`
+	LevelID     uuid.UUID `json:"level_id"`
+}
+
+// Circuit represents a single breaker slot in a panel.
+type Circuit struct {
+	ID          uuid.UUID   `json:"id"`
+	PanelID     uuid.UUID   `json:"panel_id"`
+	SlotNumber  int         `json:"slot_number"`
+	Label       string      `json:"label"`
+	Amperage    int         `json:"amperage"`
+	BreakerType BreakerType `json:"breaker_type"`
+	Notes       string      `json:"notes"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+}
+
+// CircuitConnection links a circuit to an outlet/switch/appliance marker it powers.
+type CircuitConnection struct {
+	ID             uuid.UUID      `json:"id"`
+	CircuitID      uuid.UUID      `json:"circuit_id"`
+	MarkerID       uuid.UUID      `json:"marker_id"`
+	Notes          string         `json:"notes"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	MarkerLabel    string         `json:"marker_label"`
+	MarkerCategory MarkerCategory `json:"marker_category"`
+	LevelID        uuid.UUID      `json:"level_id"`
+}
+
+type CreateBreakerPanelRequest struct {
+	MarkerID   string `json:"marker_id"`
+	TotalSlots int    `json:"total_slots"`
+	Notes      string `json:"notes"`
+}
+
+type UpdateBreakerPanelRequest struct {
+	TotalSlots int    `json:"total_slots"`
+	Notes      string `json:"notes"`
+}
+
+type CreateCircuitRequest struct {
+	SlotNumber  int         `json:"slot_number"`
+	Label       string      `json:"label"`
+	Amperage    int         `json:"amperage"`
+	BreakerType BreakerType `json:"breaker_type"`
+	Notes       string      `json:"notes"`
+}
+
+type UpdateCircuitRequest struct {
+	SlotNumber  int         `json:"slot_number"`
+	Label       string      `json:"label"`
+	Amperage    int         `json:"amperage"`
+	BreakerType BreakerType `json:"breaker_type"`
+	Notes       string      `json:"notes"`
+}
+
+type CreateCircuitConnectionRequest struct {
+	MarkerID string `json:"marker_id"`
+	Notes    string `json:"notes"`
+}
