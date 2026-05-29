@@ -1,10 +1,10 @@
 import { StrictMode, useState, useCallback, useRef, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { HomeMapCanvas, type EditMode, type Selection, type GhostLevel } from './HomeMapCanvas'
-import type { HomeLevel, AssetMarker, Room, Zone, WallSegment, MarkerCategory, ZoneType, HomeMapState, Point, MapConfig } from './types'
+import type { HomeLevel, AssetMarker, Room, Zone, WallSegment, MarkerCategory, ZoneType, HomeMapState, Point, MapConfig, GridUnit } from './types'
 import {
   PALETTE, LEVEL_TYPE_LABELS, MARKER_CATEGORY_LABELS, MARKER_CATEGORY_COLOURS,
-  ZONE_TYPE_LABELS, ZONE_TYPE_COLOURS,
+  ZONE_TYPE_LABELS, ZONE_TYPE_COLOURS, GRID_UNIT_LABELS,
   parseWalls, newId,
 } from './types'
 
@@ -26,6 +26,13 @@ const api = {
       body: JSON.stringify({ name, type, walls_json: wallsJson, map_config_json: mapConfigJson }),
     })
     return r.json()
+  },
+  async reorderLevel(id: string, orderIndex: number) {
+    await fetch(`/api/v1/levels/${id}/reorder`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order_index: orderIndex }),
+    })
   },
   async deleteLevel(id: string) {
     await fetch(`/api/v1/levels/${id}`, { method: 'DELETE' })
@@ -265,6 +272,9 @@ function App({ initialState }: { initialState: HomeMapState }) {
     if (cfg) { setMapZoom(cfg.zoom); setMapOpacity(cfg.opacity) }
   }, [activeLevelId]) // eslint-disable-line
 
+  // Grid unit
+  const [gridUnit, setGridUnit] = useState<GridUnit>('none')
+
   // Save state
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -394,6 +404,25 @@ function App({ initialState }: { initialState: HomeMapState }) {
     setAllZones(prev => prev.filter(z => z.id !== id))
     api.deleteZone(activeLevelId, id).catch(() => setSaveError('Delete failed'))
   }, [activeLevelId, allZones])
+
+  // Level reordering
+  async function handleMoveLevel(id: string, dir: 'up' | 'down') {
+    const sorted = [...levels].sort((a, b) => a.order_index - b.order_index)
+    const idx = sorted.findIndex(l => l.id === id)
+    const swapIdx = dir === 'up' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= sorted.length) return
+    const a = sorted[idx]
+    const b = sorted[swapIdx]
+    const aNew = b.order_index === a.order_index
+      ? (dir === 'up' ? a.order_index - 1 : a.order_index + 1)
+      : b.order_index
+    const bNew = a.order_index
+    await Promise.all([api.reorderLevel(a.id, aNew), api.reorderLevel(b.id, bNew)])
+    setLevels(prev => prev.map(l =>
+      l.id === a.id ? { ...l, order_index: aNew } :
+      l.id === b.id ? { ...l, order_index: bNew } : l
+    ))
+  }
 
   // Save marker/room moves on mouse-up
   useEffect(() => {
@@ -530,6 +559,17 @@ function App({ initialState }: { initialState: HomeMapState }) {
           style={btnStyle(showMapPanel ? 'tool-active' : 'tool')}
         >Map Bg</button>
         <div style={{ width: 1, height: 24, background: PALETTE.border, margin: '0 4px' }} />
+        <span style={{ fontFamily: 'sans-serif', fontSize: 11, color: '#999' }}>SCALE</span>
+        <select
+          value={gridUnit}
+          onChange={e => setGridUnit(e.target.value as GridUnit)}
+          style={{ fontSize: 12, padding: '0.2rem 0.4rem', border: `1px solid ${PALETTE.border}`, borderRadius: 4, fontFamily: 'sans-serif' }}
+        >
+          {(Object.keys(GRID_UNIT_LABELS) as GridUnit[]).map(u => (
+            <option key={u} value={u}>{GRID_UNIT_LABELS[u]}</option>
+          ))}
+        </select>
+        <div style={{ width: 1, height: 24, background: PALETTE.border, margin: '0 4px' }} />
         <button onClick={saveActiveLevel} disabled={saving || !activeLevel} style={btnStyle('primary')}>
           {saving ? 'Saving…' : '💾 Save'}
         </button>
@@ -547,20 +587,43 @@ function App({ initialState }: { initialState: HomeMapState }) {
             <span style={{ fontSize: 11, fontFamily: 'sans-serif', color: '#999', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Levels</span>
           </div>
           <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem' }}>
-            {levels.map(lvl => (
-              <div
-                key={lvl.id}
-                onClick={() => { setActiveLevelId(lvl.id); setSelection({ kind: 'none' }) }}
-                style={{
-                  padding: '0.5rem 0.6rem', marginBottom: 3, borderRadius: 5, cursor: 'pointer',
-                  background: lvl.id === activeLevelId ? PALETTE.sage : 'transparent',
-                  color: lvl.id === activeLevelId ? '#fff' : PALETTE.text,
-                  fontFamily: 'sans-serif', fontSize: 13,
-                  border: `1px solid ${lvl.id === activeLevelId ? PALETTE.sage : PALETTE.border}`,
-                }}
-              >
-                <div style={{ fontWeight: 500 }}>{lvl.name}</div>
-                <div style={{ fontSize: 10, opacity: 0.7, marginTop: 1 }}>{LEVEL_TYPE_LABELS[lvl.type] ?? lvl.type}</div>
+            {[...levels].sort((a, b) => a.order_index - b.order_index).map((lvl, idx, sorted) => (
+              <div key={lvl.id} style={{ display: 'flex', alignItems: 'stretch', marginBottom: 3, gap: 3 }}>
+                <div
+                  onClick={() => { setActiveLevelId(lvl.id); setSelection({ kind: 'none' }) }}
+                  style={{
+                    flex: 1, padding: '0.5rem 0.6rem', borderRadius: 5, cursor: 'pointer',
+                    background: lvl.id === activeLevelId ? PALETTE.sage : 'transparent',
+                    color: lvl.id === activeLevelId ? '#fff' : PALETTE.text,
+                    fontFamily: 'sans-serif', fontSize: 13,
+                    border: `1px solid ${lvl.id === activeLevelId ? PALETTE.sage : PALETTE.border}`,
+                  }}
+                >
+                  <div style={{ fontWeight: 500 }}>{lvl.name}</div>
+                  <div style={{ fontSize: 10, opacity: 0.7, marginTop: 1 }}>{LEVEL_TYPE_LABELS[lvl.type] ?? lvl.type}</div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <button
+                    onClick={e => { e.stopPropagation(); handleMoveLevel(lvl.id, 'up') }}
+                    disabled={idx === 0}
+                    title="Move up"
+                    style={{
+                      flex: 1, padding: '0 5px', fontSize: 10, cursor: idx === 0 ? 'default' : 'pointer',
+                      border: `1px solid ${PALETTE.border}`, borderRadius: 3, background: PALETTE.bg,
+                      color: PALETTE.text, opacity: idx === 0 ? 0.3 : 1, fontFamily: 'sans-serif',
+                    }}
+                  >↑</button>
+                  <button
+                    onClick={e => { e.stopPropagation(); handleMoveLevel(lvl.id, 'down') }}
+                    disabled={idx === sorted.length - 1}
+                    title="Move down"
+                    style={{
+                      flex: 1, padding: '0 5px', fontSize: 10, cursor: idx === sorted.length - 1 ? 'default' : 'pointer',
+                      border: `1px solid ${PALETTE.border}`, borderRadius: 3, background: PALETTE.bg,
+                      color: PALETTE.text, opacity: idx === sorted.length - 1 ? 0.3 : 1, fontFamily: 'sans-serif',
+                    }}
+                  >↓</button>
+                </div>
               </div>
             ))}
           </div>
@@ -601,6 +664,7 @@ function App({ initialState }: { initialState: HomeMapState }) {
               selectedCategory={selectedCategory}
               selectedZoneType={selectedZoneType}
               mapConfig={activeLevelId ? (mapConfigs[activeLevelId] ?? null) : null}
+              gridUnit={gridUnit}
               onWallsChange={handleWallsChange}
               onMarkerPlace={handleMarkerPlace}
               onMarkerMove={handleMarkerMove}

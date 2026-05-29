@@ -157,3 +157,7 @@ type UpdateRoomRequest struct {
 	XCoordinate float64 `json:"x_coordinate"`
 	YCoordinate float64 `json:"y_coordinate"`
 }
+
+type ReorderLevelRequest struct {
+	OrderIndex int `json:"order_index"`
+}

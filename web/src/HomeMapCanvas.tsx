@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react'
-import type { WallSegment, AssetMarker, Room, Zone, Point, MarkerCategory, ZoneType, MapConfig } from './types'
-import { PALETTE, MARKER_CATEGORY_COLOURS, MARKER_CATEGORY_ABBREV, ZONE_TYPE_COLOURS, ZONE_TYPE_LABELS, newId } from './types'
+import type { WallSegment, AssetMarker, Room, Zone, Point, MarkerCategory, ZoneType, MapConfig, GridUnit } from './types'
+import { PALETTE, MARKER_CATEGORY_COLOURS, MARKER_CATEGORY_ABBREV, ZONE_TYPE_COLOURS, ZONE_TYPE_LABELS, GRID_UNIT_MAP, newId } from './types'
 
 export type EditMode = 'select' | 'draw' | 'room' | 'marker' | 'zone'
 
@@ -30,6 +30,7 @@ interface Props {
   selectedCategory: MarkerCategory
   selectedZoneType: ZoneType
   mapConfig: MapConfig | null
+  gridUnit: GridUnit
   onWallsChange: (walls: WallSegment[]) => void
   onMarkerPlace: (x: number, y: number) => void
   onMarkerMove: (id: string, x: number, y: number) => void
@@ -134,7 +135,7 @@ function drawWalls(ctx: CanvasRenderingContext2D, walls: WallSegment[], W: numbe
 }
 
 export function HomeMapCanvas({
-  walls, markers, rooms, zones, ghostLevels, mode, selectedCategory, selectedZoneType, mapConfig,
+  walls, markers, rooms, zones, ghostLevels, mode, selectedCategory, selectedZoneType, mapConfig, gridUnit,
   onWallsChange, onMarkerPlace, onMarkerMove, onMarkerDelete,
   onRoomPlace, onRoomMove, onRoomDelete,
   onZoneCreate, onZoneDelete,
@@ -153,6 +154,7 @@ export function HomeMapCanvas({
   const catRef = useRef(selectedCategory)
   const zoneTypeRef = useRef(selectedZoneType)
   const mapConfigRef = useRef(mapConfig)
+  const gridUnitRef = useRef(gridUnit)
   wallsRef.current = walls
   markersRef.current = markers
   roomsRef.current = rooms
@@ -163,6 +165,7 @@ export function HomeMapCanvas({
   catRef.current = selectedCategory
   zoneTypeRef.current = selectedZoneType
   mapConfigRef.current = mapConfig
+  gridUnitRef.current = gridUnit
 
   // Tile image cache for satellite background
   const tileCache = useRef(new Map<string, HTMLImageElement | 'loading' | 'error'>())
@@ -443,6 +446,27 @@ export function HomeMapCanvas({
       ctx.fillText(label, W - 10, H - 10)
     }
 
+    // Scale bar (drawn in screen space when a grid unit is selected)
+    const gu = gridUnitRef.current
+    const guDef = gu !== 'none' ? GRID_UNIT_MAP[gu] : undefined
+    if (guDef) {
+      const barPx = Math.round(GRID_PX * vp.scale)
+      const barX = 14
+      const barY = H - 22
+      ctx.strokeStyle = 'rgba(44,44,44,0.65)'
+      ctx.lineWidth = 1.5
+      ctx.lineCap = 'square'
+      ctx.beginPath()
+      ctx.moveTo(barX, barY - 4); ctx.lineTo(barX, barY + 4)
+      ctx.moveTo(barX, barY); ctx.lineTo(barX + barPx, barY)
+      ctx.moveTo(barX + barPx, barY - 4); ctx.lineTo(barX + barPx, barY + 4)
+      ctx.stroke()
+      ctx.font = '10px sans-serif'
+      ctx.fillStyle = 'rgba(44,44,44,0.65)'
+      ctx.textAlign = 'center'
+      ctx.fillText(`${guDef.value} ${guDef.suffix}`, barX + barPx / 2, barY + 13)
+    }
+
     void FONT_VERTEX
   }, [])
 
@@ -458,7 +482,7 @@ export function HomeMapCanvas({
     return () => obs.disconnect()
   }, [draw])
 
-  useEffect(() => { draw() }, [draw, walls, markers, rooms, zones, ghostLevels, selection, mode, selectedZoneType, mapConfig])
+  useEffect(() => { draw() }, [draw, walls, markers, rooms, zones, ghostLevels, selection, mode, selectedZoneType, mapConfig, gridUnit])
 
   // --- Hit testing ---
 
@@ -708,7 +732,12 @@ export function HomeMapCanvas({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === ' ') { spaceHeld.current = true; e.preventDefault() }
+      if (e.key === ' ') {
+        const tag = (e.target as HTMLElement).tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return
+        spaceHeld.current = true
+        e.preventDefault()
+      }
 
       if ((e.key === 'Escape') && (modeRef.current === 'draw' || modeRef.current === 'zone')) {
         drawing.current = { active: false, points: [], cursor: null, snap: null }
@@ -723,7 +752,7 @@ export function HomeMapCanvas({
         return
       }
 
-      if ((e.key === 'Delete' || e.key === 'Backspace') && (e.target as HTMLElement).tagName !== 'INPUT') {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
         const sel = selRef.current
         if (sel.kind === 'vertex' && sel.wallId) {
           const wall = wallsRef.current.find(w => w.id === sel.wallId)
@@ -752,7 +781,12 @@ export function HomeMapCanvas({
       }
     }
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === ' ') { spaceHeld.current = false; panning.current.active = false }
+      if (e.key === ' ') {
+        const tag = (e.target as HTMLElement).tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return
+        spaceHeld.current = false
+        panning.current.active = false
+      }
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('keyup', onKeyUp)

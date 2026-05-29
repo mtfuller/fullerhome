@@ -119,6 +119,29 @@ export interface WallSegment {
   closed: boolean
 }
 
+export type GridUnit = 'none' | '1ft' | '2ft' | '5ft' | '10ft' | '1m' | '2m' | '5m'
+
+export const GRID_UNIT_LABELS: Record<GridUnit, string> = {
+  none: 'None',
+  '1ft': '1 ft / square',
+  '2ft': '2 ft / square',
+  '5ft': '5 ft / square',
+  '10ft': '10 ft / square',
+  '1m': '1 m / square',
+  '2m': '2 m / square',
+  '5m': '5 m / square',
+}
+
+export const GRID_UNIT_MAP: Partial<Record<GridUnit, { value: number; suffix: string }>> = {
+  '1ft': { value: 1, suffix: 'ft' },
+  '2ft': { value: 2, suffix: 'ft' },
+  '5ft': { value: 5, suffix: 'ft' },
+  '10ft': { value: 10, suffix: 'ft' },
+  '1m': { value: 1, suffix: 'm' },
+  '2m': { value: 2, suffix: 'm' },
+  '5m': { value: 5, suffix: 'm' },
+}
+
 export const PALETTE = {
   bg: '#fcfbfa',
   sage: '#3c6255',
