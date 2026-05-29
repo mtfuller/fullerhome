@@ -91,7 +91,7 @@ var homeMapTmpl = template.Must(template.New("homemap").Parse(`<!DOCTYPE html>
     <a href="/electrical">Electrical</a>
   </nav>
   <div id="home-map-root" data-state="{{.StateJSON}}"></div>
-  <script src="/static/main.js" defer></script>
+  <script type="module" src="/static/main.js"></script>
 </body>
 </html>`))
 
