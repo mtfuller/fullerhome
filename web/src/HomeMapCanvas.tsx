@@ -31,6 +31,8 @@ interface Props {
   selectedZoneType: ZoneType
   mapConfig: MapConfig | null
   gridUnit: GridUnit
+  circuitOverlayIds?: string[]
+  circuitPanelMarkerId?: string | null
   onWallsChange: (walls: WallSegment[]) => void
   onMarkerPlace: (x: number, y: number) => void
   onMarkerMove: (id: string, x: number, y: number) => void
@@ -136,6 +138,7 @@ function drawWalls(ctx: CanvasRenderingContext2D, walls: WallSegment[], W: numbe
 
 export function HomeMapCanvas({
   walls, markers, rooms, zones, ghostLevels, mode, selectedCategory, selectedZoneType, mapConfig, gridUnit,
+  circuitOverlayIds, circuitPanelMarkerId,
   onWallsChange, onMarkerPlace, onMarkerMove, onMarkerDelete,
   onRoomPlace, onRoomMove, onRoomDelete,
   onZoneCreate, onZoneDelete,
@@ -155,6 +158,8 @@ export function HomeMapCanvas({
   const zoneTypeRef = useRef(selectedZoneType)
   const mapConfigRef = useRef(mapConfig)
   const gridUnitRef = useRef(gridUnit)
+  const circuitOverlayIdsRef = useRef<string[]>([])
+  const circuitPanelMarkerIdRef = useRef<string | null>(null)
   wallsRef.current = walls
   markersRef.current = markers
   roomsRef.current = rooms
@@ -166,6 +171,8 @@ export function HomeMapCanvas({
   zoneTypeRef.current = selectedZoneType
   mapConfigRef.current = mapConfig
   gridUnitRef.current = gridUnit
+  circuitOverlayIdsRef.current = circuitOverlayIds ?? []
+  circuitPanelMarkerIdRef.current = circuitPanelMarkerId ?? null
 
   // Tile image cache for satellite background
   const tileCache = useRef(new Map<string, HTMLImageElement | 'loading' | 'error'>())
@@ -370,6 +377,45 @@ export function HomeMapCanvas({
       ctx.fillText(marker.label, mx, my + MARKER_HALF + 13)
     })
 
+    // Circuit overlay: wiring lines + amber glow rings
+    const overlayIds = circuitOverlayIdsRef.current
+    const panelMId = circuitPanelMarkerIdRef.current
+    if (overlayIds.length > 0) {
+      const panelMarker = panelMId ? ms.find(m => m.id === panelMId) : null
+      const pmx = panelMarker ? toPx(panelMarker.x_coordinate, W) : null
+      const pmy = panelMarker ? toPx(panelMarker.y_coordinate, H) : null
+
+      const connectedOnLevel = ms.filter(m => overlayIds.includes(m.id))
+      connectedOnLevel.forEach(m => {
+        const mx2 = toPx(m.x_coordinate, W)
+        const my2 = toPx(m.y_coordinate, H)
+        if (pmx !== null && pmy !== null) {
+          ctx.strokeStyle = '#f59e0b'
+          ctx.lineWidth = 1.5
+          ctx.setLineDash([5, 3])
+          ctx.globalAlpha = 0.7
+          ctx.beginPath()
+          ctx.moveTo(pmx, pmy)
+          ctx.lineTo(mx2, my2)
+          ctx.stroke()
+          ctx.setLineDash([])
+          ctx.globalAlpha = 1
+        }
+        ctx.beginPath()
+        ctx.arc(mx2, my2, MARKER_HALF + 6, 0, Math.PI * 2)
+        ctx.strokeStyle = '#f59e0b'
+        ctx.lineWidth = 2
+        ctx.stroke()
+      })
+      if (panelMarker && pmx !== null && pmy !== null) {
+        ctx.beginPath()
+        ctx.arc(pmx, pmy, MARKER_HALF + 8, 0, Math.PI * 2)
+        ctx.strokeStyle = '#f59e0b'
+        ctx.lineWidth = 2.5
+        ctx.stroke()
+      }
+    }
+
     // Drawing preview (walls and zones share the same drawing state)
     if (modeRef.current === 'draw' || modeRef.current === 'zone') {
       const isZoneMode = modeRef.current === 'zone'
@@ -482,7 +528,7 @@ export function HomeMapCanvas({
     return () => obs.disconnect()
   }, [draw])
 
-  useEffect(() => { draw() }, [draw, walls, markers, rooms, zones, ghostLevels, selection, mode, selectedZoneType, mapConfig, gridUnit])
+  useEffect(() => { draw() }, [draw, walls, markers, rooms, zones, ghostLevels, selection, mode, selectedZoneType, mapConfig, gridUnit, circuitOverlayIds, circuitPanelMarkerId])
 
   // --- Hit testing ---
 

@@ -235,3 +235,28 @@ type CreateCircuitConnectionRequest struct {
 	MarkerID string `json:"marker_id"`
 	Notes    string `json:"notes"`
 }
+
+type EventType string
+
+const (
+	EventInspected EventType = "INSPECTED"
+	EventReplaced  EventType = "REPLACED"
+	EventServiced  EventType = "SERVICED"
+	EventRepaired  EventType = "REPAIRED"
+	EventCleaned   EventType = "CLEANED"
+	EventNote      EventType = "NOTE"
+)
+
+// MarkerEvent is a timestamped log entry attached to an asset marker.
+type MarkerEvent struct {
+	ID        int64     `json:"id"`
+	MarkerID  uuid.UUID `json:"marker_id"`
+	EventType EventType `json:"event_type"`
+	Note      string    `json:"note"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type CreateMarkerEventRequest struct {
+	EventType EventType `json:"event_type"`
+	Note      string    `json:"note"`
+}

@@ -1,10 +1,10 @@
-import { StrictMode, useState, useCallback, useRef, useEffect } from 'react'
+import { StrictMode, useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { createRoot } from 'react-dom/client'
 import { HomeMapCanvas, type EditMode, type Selection, type GhostLevel } from './HomeMapCanvas'
-import type { HomeLevel, AssetMarker, Room, Zone, WallSegment, MarkerCategory, ZoneType, HomeMapState, Point, MapConfig, GridUnit } from './types'
+import type { HomeLevel, AssetMarker, Room, Zone, WallSegment, MarkerCategory, ZoneType, HomeMapState, Point, MapConfig, GridUnit, BreakerPanel, Circuit, CircuitConnection, MarkerEvent, EventType } from './types'
 import {
   PALETTE, LEVEL_TYPE_LABELS, LEVEL_TYPE_ORDER, MARKER_CATEGORY_LABELS, MARKER_CATEGORY_COLOURS,
-  ZONE_TYPE_LABELS, ZONE_TYPE_COLOURS, GRID_UNIT_LABELS,
+  ZONE_TYPE_LABELS, ZONE_TYPE_COLOURS, GRID_UNIT_LABELS, EVENT_TYPE_LABELS, EVENT_TYPE_COLOURS,
   parseWalls, newId,
 } from './types'
 
@@ -258,6 +258,22 @@ function App({ initialState }: { initialState: HomeMapState }) {
   const [geocoding, setGeocoding] = useState(false)
   const [geocodeError, setGeocodeError] = useState<string | null>(null)
 
+  // Grid unit
+  const [gridUnit, setGridUnit] = useState<GridUnit>('none')
+
+  // Circuit overlay
+  const [showCircuitPanel, setShowCircuitPanel] = useState(false)
+  const [circuitPanels, setCircuitPanels] = useState<BreakerPanel[]>([])
+  const [circuitCircuits, setCircuitCircuits] = useState<Circuit[]>([])
+  const [circuitConnections, setCircuitConnections] = useState<CircuitConnection[]>([])
+  const [selectedOverlayPanelId, setSelectedOverlayPanelId] = useState<string | null>(null)
+  const [selectedOverlayCircuitId, setSelectedOverlayCircuitId] = useState<string | null>(null)
+  const [circuitPanelsLoading, setCircuitPanelsLoading] = useState(false)
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchFocused, setSearchFocused] = useState(false)
+
   // Keep panel fields in sync with the active level's config
   useEffect(() => {
     if (!activeLevelId) return
@@ -265,8 +281,40 @@ function App({ initialState }: { initialState: HomeMapState }) {
     if (cfg) { setMapZoom(cfg.zoom); setMapOpacity(cfg.opacity) }
   }, [activeLevelId]) // eslint-disable-line
 
-  // Grid unit
-  const [gridUnit, setGridUnit] = useState<GridUnit>('none')
+  // Load breaker panels when circuit overlay opens
+  useEffect(() => {
+    if (!showCircuitPanel) return
+    setCircuitPanelsLoading(true)
+    fetch('/api/v1/breaker-panels')
+      .then(r => r.json())
+      .then((data: BreakerPanel[]) => {
+        setCircuitPanels(data)
+        if (data.length > 0 && !selectedOverlayPanelId) setSelectedOverlayPanelId(data[0].id)
+      })
+      .catch(console.error)
+      .finally(() => setCircuitPanelsLoading(false))
+  }, [showCircuitPanel]) // eslint-disable-line
+
+  // Load circuits when panel selection changes
+  useEffect(() => {
+    if (!selectedOverlayPanelId) { setCircuitCircuits([]); setSelectedOverlayCircuitId(null); return }
+    fetch(`/api/v1/breaker-panels/${selectedOverlayPanelId}/circuits`)
+      .then(r => r.json())
+      .then((data: Circuit[]) => {
+        setCircuitCircuits(data)
+        setSelectedOverlayCircuitId(data.length > 0 ? data[0].id : null)
+      })
+      .catch(console.error)
+  }, [selectedOverlayPanelId])
+
+  // Load connections when circuit selection changes
+  useEffect(() => {
+    if (!selectedOverlayCircuitId) { setCircuitConnections([]); return }
+    fetch(`/api/v1/circuits/${selectedOverlayCircuitId}/connections`)
+      .then(r => r.json())
+      .then(setCircuitConnections)
+      .catch(console.error)
+  }, [selectedOverlayCircuitId])
 
   // Save state
   const [saving, setSaving] = useState(false)
@@ -466,6 +514,44 @@ function App({ initialState }: { initialState: HomeMapState }) {
   const selectedRoom = selection.kind === 'room' ? allRooms.find(r => r.id === selection.roomId) ?? null : null
   const selectedZone = selection.kind === 'zone' ? allZones.find(z => z.id === selection.zoneId) ?? null : null
 
+  // Circuit overlay derived values
+  const circuitOverlayIds = useMemo(() => circuitConnections.map(c => c.marker_id), [circuitConnections])
+  const circuitPanelMarkerId = useMemo(() => {
+    const panel = circuitPanels.find(p => p.id === selectedOverlayPanelId)
+    return panel?.marker_id ?? null
+  }, [circuitPanels, selectedOverlayPanelId])
+
+  // Search results
+  interface SearchResult { kind: 'marker' | 'room' | 'zone'; id: string; label: string; levelId: string; levelName: string }
+  const searchResults = useMemo((): SearchResult[] => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return []
+    const levelName = (id: string) => levels.find(l => l.id === id)?.name ?? '?'
+    const results: SearchResult[] = []
+    allMarkers.forEach(m => {
+      if (m.label.toLowerCase().includes(q) || m.notes.toLowerCase().includes(q))
+        results.push({ kind: 'marker', id: m.id, label: m.label, levelId: m.level_id, levelName: levelName(m.level_id) })
+    })
+    allRooms.forEach(r => {
+      if (r.name.toLowerCase().includes(q))
+        results.push({ kind: 'room', id: r.id, label: r.name, levelId: r.level_id, levelName: levelName(r.level_id) })
+    })
+    allZones.forEach(z => {
+      if (z.name.toLowerCase().includes(q))
+        results.push({ kind: 'zone', id: z.id, label: z.name, levelId: z.level_id, levelName: levelName(z.level_id) })
+    })
+    return results.slice(0, 20)
+  }, [searchQuery, allMarkers, allRooms, allZones, levels])
+
+  function handleSearchResultClick(result: SearchResult) {
+    setActiveLevelId(result.levelId)
+    setSearchQuery('')
+    setSearchFocused(false)
+    if (result.kind === 'marker') setSelection({ kind: 'marker', markerId: result.id })
+    else if (result.kind === 'room') setSelection({ kind: 'room', roomId: result.id })
+    else if (result.kind === 'zone') setSelection({ kind: 'zone', zoneId: result.id })
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: PALETTE.bg }}>
       {/* Toolbar */}
@@ -532,6 +618,11 @@ function App({ initialState }: { initialState: HomeMapState }) {
           title="Satellite background"
           style={btnStyle(showMapPanel ? 'tool-active' : 'tool')}
         >Map Bg</button>
+        <button
+          onClick={() => setShowCircuitPanel(p => !p)}
+          title="Circuit wiring overlay"
+          style={btnStyle(showCircuitPanel ? 'tool-active' : 'tool')}
+        >Circuits</button>
         <div style={{ width: 1, height: 24, background: PALETTE.border, margin: '0 4px' }} />
         <span style={{ fontFamily: 'sans-serif', fontSize: 11, color: '#999' }}>SCALE</span>
         <select
@@ -617,6 +708,8 @@ function App({ initialState }: { initialState: HomeMapState }) {
               selectedZoneType={selectedZoneType}
               mapConfig={activeLevelId ? (mapConfigs[activeLevelId] ?? null) : null}
               gridUnit={gridUnit}
+              circuitOverlayIds={showCircuitPanel ? circuitOverlayIds : undefined}
+              circuitPanelMarkerId={showCircuitPanel ? circuitPanelMarkerId : undefined}
               onWallsChange={handleWallsChange}
               onMarkerPlace={handleMarkerPlace}
               onMarkerMove={handleMarkerMove}
@@ -650,6 +743,74 @@ function App({ initialState }: { initialState: HomeMapState }) {
             {mode === 'room' && 'Click to place a room label'}
             {mode === 'marker' && `Click to place ${MARKER_CATEGORY_LABELS[selectedCategory]} marker`}
           </div>
+
+          {/* Circuit overlay panel */}
+          {showCircuitPanel && (
+            <div style={{
+              position: 'absolute', top: 8, right: showMapPanel ? 276 : 8,
+              background: '#fff', border: `1px solid ${PALETTE.border}`, borderRadius: 8,
+              padding: '1rem', width: 260, boxShadow: '0 4px 16px rgba(0,0,0,0.10)',
+              fontFamily: 'sans-serif', fontSize: 12, zIndex: 10,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                <span style={{ fontWeight: 600, color: PALETTE.sage, fontSize: 13 }}>Circuit Overlay</span>
+                <button onClick={() => { setShowCircuitPanel(false); setCircuitConnections([]) }} style={{ ...btnStyle('ghost'), padding: '0.1rem 0.4rem', fontSize: 14, lineHeight: 1 }}>×</button>
+              </div>
+
+              {circuitPanelsLoading && <p style={{ color: '#aaa', fontSize: 11 }}>Loading panels…</p>}
+              {!circuitPanelsLoading && circuitPanels.length === 0 && (
+                <p style={{ color: '#aaa', fontSize: 11 }}>No breaker panels found. Add panels on the Electrical page first.</p>
+              )}
+
+              {circuitPanels.length > 0 && (
+                <>
+                  <label style={{ display: 'block', color: '#888', marginBottom: 3 }}>Panel</label>
+                  <select
+                    value={selectedOverlayPanelId ?? ''}
+                    onChange={e => setSelectedOverlayPanelId(e.target.value || null)}
+                    style={{ width: '100%', padding: '0.3rem 0.5rem', border: `1px solid ${PALETTE.border}`, borderRadius: 4, fontSize: 12, marginBottom: '0.6rem' }}
+                  >
+                    {circuitPanels.map(p => <option key={p.id} value={p.id}>{p.marker_label}</option>)}
+                  </select>
+
+                  <label style={{ display: 'block', color: '#888', marginBottom: 3 }}>Circuit</label>
+                  <select
+                    value={selectedOverlayCircuitId ?? ''}
+                    onChange={e => setSelectedOverlayCircuitId(e.target.value || null)}
+                    style={{ width: '100%', padding: '0.3rem 0.5rem', border: `1px solid ${PALETTE.border}`, borderRadius: 4, fontSize: 12, marginBottom: '0.75rem' }}
+                  >
+                    <option value="">— select circuit —</option>
+                    {circuitCircuits.map(c => (
+                      <option key={c.id} value={c.id}>Slot {c.slot_number} · {c.label} ({c.amperage}A)</option>
+                    ))}
+                  </select>
+
+                  {selectedOverlayCircuitId && (
+                    <div>
+                      <div style={{ fontSize: 11, color: PALETTE.sage, fontWeight: 600, marginBottom: 4 }}>
+                        Connected ({circuitConnections.length})
+                      </div>
+                      {circuitConnections.length === 0 && (
+                        <p style={{ color: '#aaa', fontSize: 11 }}>No connections on this circuit.</p>
+                      )}
+                      {circuitConnections.map(conn => (
+                        <div key={conn.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0', borderBottom: `1px solid ${PALETTE.border}` }}>
+                          <div style={{ width: 8, height: 8, borderRadius: 2, background: MARKER_CATEGORY_COLOURS[conn.marker_category] ?? '#888', flexShrink: 0 }} />
+                          <span style={{ flex: 1, fontSize: 11, color: PALETTE.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{conn.marker_label}</span>
+                          <span style={{ fontSize: 10, color: '#aaa' }}>{levels.find(l => l.id === conn.level_id)?.name ?? '?'}</span>
+                        </div>
+                      ))}
+                      {circuitConnections.length > 0 && (
+                        <p style={{ fontSize: 10, color: '#f59e0b', marginTop: 6 }}>
+                          Amber rings + lines shown on current level.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           {/* Satellite map background panel */}
           {showMapPanel && activeLevelId && (
@@ -727,6 +888,52 @@ function App({ initialState }: { initialState: HomeMapState }) {
           <div style={{ padding: '0.75rem 0.75rem 0.5rem', borderBottom: `1px solid ${PALETTE.border}` }}>
             <span style={{ fontSize: 11, fontFamily: 'sans-serif', color: '#999', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Properties</span>
           </div>
+          {/* Search */}
+          <div style={{ position: 'relative', padding: '0.4rem 0.5rem', borderBottom: `1px solid ${PALETTE.border}` }}>
+            <input
+              type="search"
+              placeholder="Search markers, rooms, zones…"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setTimeout(() => setSearchFocused(false), 150)}
+              style={{ ...inputStyle, fontSize: 11, padding: '0.25rem 0.4rem' }}
+            />
+            {searchFocused && searchResults.length > 0 && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0,
+                background: '#fff', border: `1px solid ${PALETTE.border}`, borderTop: 'none',
+                borderRadius: '0 0 4px 4px', zIndex: 20, maxHeight: 280, overflowY: 'auto',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.10)',
+              }}>
+                {searchResults.map(r => (
+                  <button
+                    key={r.kind + r.id}
+                    onMouseDown={() => handleSearchResultClick(r)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      width: '100%', padding: '6px 8px', border: 'none',
+                      background: 'transparent', cursor: 'pointer', textAlign: 'left',
+                      borderBottom: `1px solid ${PALETTE.border}`,
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = PALETTE.sageLight)}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <div style={{
+                      width: 8, height: 8, borderRadius: 2, flexShrink: 0,
+                      background: r.kind === 'marker'
+                        ? (MARKER_CATEGORY_COLOURS[allMarkers.find(m => m.id === r.id)?.category ?? 'OUTLET'] ?? '#888')
+                        : r.kind === 'room' ? PALETTE.sage : '#6b9e5e',
+                    }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, color: PALETTE.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.label}</div>
+                      <div style={{ fontSize: 10, color: '#aaa' }}>{r.levelName} · {r.kind}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem' }}>
             {selection.kind === 'none' && (
               <p style={{ fontFamily: 'sans-serif', fontSize: 12, color: '#aaa' }}>Select an element on the canvas to view and edit its properties.</p>
@@ -752,6 +959,7 @@ function App({ initialState }: { initialState: HomeMapState }) {
             {selectedMarker && activeLevelId && (
               <MarkerProps
                 marker={selectedMarker}
+                levelId={activeLevelId}
                 onUpdate={async (label, category, notes) => {
                   const updated = await api.updateMarker(activeLevelId, selectedMarker.id, label, category, selectedMarker.x_coordinate, selectedMarker.y_coordinate, notes)
                   setAllMarkers(ms => ms.map(m => m.id === updated.id ? updated : m))
@@ -912,16 +1120,44 @@ function VertexProps({ wallId, pointIndex, walls, onWallsChange }: {
   )
 }
 
-function MarkerProps({ marker, onUpdate, onDelete }: {
+function MarkerProps({ marker, levelId, onUpdate, onDelete }: {
   marker: AssetMarker
+  levelId: string
   onUpdate: (label: string, category: string, notes: string) => void
   onDelete: () => void
 }) {
   const [label, setLabel] = useState(marker.label)
   const [category, setCategory] = useState<MarkerCategory>(marker.category)
   const [notes, setNotes] = useState(marker.notes)
+  const [events, setEvents] = useState<MarkerEvent[]>([])
+  const [newEventType, setNewEventType] = useState<EventType>('NOTE')
+  const [newEventNote, setNewEventNote] = useState('')
+  const [addingEvent, setAddingEvent] = useState(false)
 
   useEffect(() => { setLabel(marker.label); setCategory(marker.category); setNotes(marker.notes) }, [marker.id])
+
+  useEffect(() => {
+    setEvents([])
+    fetch(`/api/v1/levels/${levelId}/markers/${marker.id}/events`)
+      .then(r => r.json())
+      .then(setEvents)
+      .catch(console.error)
+  }, [marker.id, levelId])
+
+  async function handleAddEvent() {
+    if (addingEvent) return
+    setAddingEvent(true)
+    try {
+      const r = await fetch(`/api/v1/levels/${levelId}/markers/${marker.id}/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_type: newEventType, note: newEventNote }),
+      })
+      const evt: MarkerEvent = await r.json()
+      setEvents(prev => [evt, ...prev])
+      setNewEventNote('')
+    } catch (e) { console.error(e) } finally { setAddingEvent(false) }
+  }
 
   const colour = MARKER_CATEGORY_COLOURS[category]
 
@@ -946,6 +1182,51 @@ function MarkerProps({ marker, onUpdate, onDelete }: {
       <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
         <button onClick={() => onUpdate(label, category, notes)} style={btnStyle('primary')}>Save</button>
         <button onClick={onDelete} style={btnStyle('danger')}>Delete</button>
+      </div>
+
+      {/* Maintenance log */}
+      <div style={{ marginTop: 14, borderTop: `1px solid ${PALETTE.border}`, paddingTop: 10 }}>
+        <div style={{ fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Maintenance Log</div>
+
+        {/* Add event form */}
+        <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
+          <select
+            value={newEventType}
+            onChange={e => setNewEventType(e.target.value as EventType)}
+            style={{ flex: 1, ...inputStyle, fontSize: 11, padding: '0.2rem 0.3rem' }}
+          >
+            {(Object.keys(EVENT_TYPE_LABELS) as EventType[]).map(t => (
+              <option key={t} value={t}>{EVENT_TYPE_LABELS[t]}</option>
+            ))}
+          </select>
+          <button
+            onClick={handleAddEvent}
+            disabled={addingEvent}
+            style={{ ...btnStyle('primary'), padding: '0.2rem 0.5rem', fontSize: 11 }}
+          >+ Log</button>
+        </div>
+        <input
+          value={newEventNote}
+          onChange={e => setNewEventNote(e.target.value)}
+          placeholder="Optional note…"
+          onKeyDown={e => e.key === 'Enter' && handleAddEvent()}
+          style={{ ...inputStyle, fontSize: 11, marginBottom: 8 }}
+        />
+
+        {/* Event list */}
+        {events.length === 0 && (
+          <p style={{ color: '#bbb', fontSize: 11, textAlign: 'center', padding: '4px 0' }}>No entries yet.</p>
+        )}
+        {events.map(evt => (
+          <div key={evt.id} style={{ padding: '5px 0', borderBottom: `1px solid ${PALETTE.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <div style={{ width: 6, height: 6, borderRadius: 3, background: EVENT_TYPE_COLOURS[evt.event_type], flexShrink: 0 }} />
+              <span style={{ fontWeight: 600, fontSize: 11, color: EVENT_TYPE_COLOURS[evt.event_type] }}>{EVENT_TYPE_LABELS[evt.event_type]}</span>
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: '#bbb' }}>{new Date(evt.created_at).toLocaleDateString()}</span>
+            </div>
+            {evt.note && <p style={{ margin: '2px 0 0 11px', fontSize: 11, color: '#666' }}>{evt.note}</p>}
+          </div>
+        ))}
       </div>
     </div>
   )

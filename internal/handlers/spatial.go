@@ -712,6 +712,69 @@ func (h *HomeMapHandler) queryZonesForLevel(r *http.Request, levelID string) ([]
 	return zones, nil
 }
 
+// ListMarkerEvents handles GET /api/v1/levels/:levelID/markers/:markerID/events.
+func (h *HomeMapHandler) ListMarkerEvents(w http.ResponseWriter, r *http.Request) {
+	markerID, err := uuid.Parse(chi.URLParam(r, "markerID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid markerID")
+		return
+	}
+	rows, err := h.db.QueryContext(r.Context(), `
+		SELECT id, marker_id, event_type, note, created_at
+		FROM marker_events WHERE marker_id = ? ORDER BY created_at DESC`, markerID.String())
+	if err != nil {
+		h.internalError(w, "list events", err)
+		return
+	}
+	defer rows.Close()
+	events := []domain.MarkerEvent{}
+	for rows.Next() {
+		var e domain.MarkerEvent
+		var midStr, evtType string
+		if err := rows.Scan(&e.ID, &midStr, &evtType, &e.Note, &e.CreatedAt); err != nil {
+			h.internalError(w, "scan event", err)
+			return
+		}
+		e.MarkerID = uuid.MustParse(midStr)
+		e.EventType = domain.EventType(evtType)
+		events = append(events, e)
+	}
+	writeJSON(w, http.StatusOK, events)
+}
+
+// CreateMarkerEvent handles POST /api/v1/levels/:levelID/markers/:markerID/events.
+func (h *HomeMapHandler) CreateMarkerEvent(w http.ResponseWriter, r *http.Request) {
+	markerID, err := uuid.Parse(chi.URLParam(r, "markerID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid markerID")
+		return
+	}
+	var req domain.CreateMarkerEventRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.EventType == "" {
+		req.EventType = domain.EventNote
+	}
+	now := time.Now().UTC()
+	res, err := h.db.ExecContext(r.Context(),
+		`INSERT INTO marker_events (marker_id, event_type, note, created_at) VALUES (?, ?, ?, ?)`,
+		markerID.String(), string(req.EventType), req.Note, now)
+	if err != nil {
+		h.internalError(w, "create event", err)
+		return
+	}
+	id, _ := res.LastInsertId()
+	writeJSON(w, http.StatusCreated, domain.MarkerEvent{
+		ID:        id,
+		MarkerID:  markerID,
+		EventType: req.EventType,
+		Note:      req.Note,
+		CreatedAt: now,
+	})
+}
+
 func (h *HomeMapHandler) internalError(w http.ResponseWriter, op string, err error) {
 	h.logger.Error("handler error", "op", op, "error", err)
 	writeError(w, http.StatusInternalServerError, "internal server error")
