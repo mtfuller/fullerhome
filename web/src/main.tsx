@@ -272,10 +272,15 @@ function App({ initialState }: { initialState: HomeMapState }) {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingSaveRef = useRef(false)
 
   function scheduleAutoSave() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(saveActiveLevel, 1500)
+    pendingSaveRef.current = true
+    saveTimerRef.current = setTimeout(() => {
+      pendingSaveRef.current = false
+      saveActiveLevel()
+    }, 1500)
   }
 
   async function saveActiveLevel() {
@@ -293,6 +298,26 @@ function App({ initialState }: { initialState: HomeMapState }) {
       setSaving(false)
     }
   }
+
+  // Flush any pending debounced save before the user navigates away
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (!pendingSaveRef.current || !activeLevel || !activeLevelId) return
+      clearTimeout(saveTimerRef.current!)
+      pendingSaveRef.current = false
+      const wallsJson = JSON.stringify(allWalls[activeLevelId] ?? [])
+      const cfg = mapConfigs[activeLevelId]
+      const mapConfigJson = cfg ? JSON.stringify(cfg) : ''
+      fetch(`/api/v1/levels/${activeLevelId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: activeLevel.name, type: activeLevel.type, walls_json: wallsJson, map_config_json: mapConfigJson }),
+        keepalive: true,
+      })
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [activeLevelId, activeLevel, allWalls, mapConfigs])
 
   // Wall mutations
   const handleWallsChange = useCallback((newWalls: WallSegment[]) => {
