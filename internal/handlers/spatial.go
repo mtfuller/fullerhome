@@ -154,31 +154,6 @@ func (h *HomeMapHandler) UpdateLevel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, level)
 }
 
-// ReorderLevel handles PATCH /api/v1/levels/{levelID}/reorder.
-func (h *HomeMapHandler) ReorderLevel(w http.ResponseWriter, r *http.Request) {
-	levelID := chi.URLParam(r, "levelID")
-
-	var req domain.ReorderLevelRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	res, err := h.db.ExecContext(r.Context(),
-		`UPDATE spatial_levels SET order_index=? WHERE id=?`,
-		req.OrderIndex, levelID,
-	)
-	if err != nil {
-		h.internalError(w, "reorder level", err)
-		return
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		writeError(w, http.StatusNotFound, "level not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // DeleteLevel handles DELETE /api/v1/levels/{levelID}.
 func (h *HomeMapHandler) DeleteLevel(w http.ResponseWriter, r *http.Request) {
 	levelID := chi.URLParam(r, "levelID")

@@ -31,11 +31,17 @@ func (h *ElectricalHandler) ElectricalPage(w http.ResponseWriter, r *http.Reques
 		h.internalError(w, "list panels", err)
 		return
 	}
-	markers, err := h.queryConnectableMarkers(r)
+	connectable, err := h.queryConnectableMarkers(r)
 	if err != nil {
 		h.internalError(w, "list markers", err)
 		return
 	}
+	breakers, err := h.queryBreakerMarkers(r)
+	if err != nil {
+		h.internalError(w, "list breaker markers", err)
+		return
+	}
+	markers := append(breakers, connectable...)
 	renderElectrical(w, panels, markers)
 }
 
@@ -477,6 +483,35 @@ func (h *ElectricalHandler) queryConnectionByID(r *http.Request, id uuid.UUID) (
 }
 
 // queryConnectableMarkers returns all non-BREAKER markers for the connection picker.
+func (h *ElectricalHandler) queryBreakerMarkers(r *http.Request) ([]domain.AssetMarker, error) {
+	rows, err := h.db.QueryContext(r.Context(), `
+		SELECT id, level_id, label, category, x_coordinate, y_coordinate, notes, updated_at
+		FROM asset_markers
+		WHERE category = 'BREAKER'
+		ORDER BY label`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var markers []domain.AssetMarker
+	for rows.Next() {
+		var m domain.AssetMarker
+		var idStr, levelIDStr, cat string
+		if err := rows.Scan(&idStr, &levelIDStr, &m.Label, &cat,
+			&m.XCoordinate, &m.YCoordinate, &m.Notes, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		m.ID = uuid.MustParse(idStr)
+		m.LevelID = uuid.MustParse(levelIDStr)
+		m.Category = domain.MarkerCategory(cat)
+		markers = append(markers, m)
+	}
+	if markers == nil {
+		markers = []domain.AssetMarker{}
+	}
+	return markers, rows.Err()
+}
+
 func (h *ElectricalHandler) queryConnectableMarkers(r *http.Request) ([]domain.AssetMarker, error) {
 	rows, err := h.db.QueryContext(r.Context(), `
 		SELECT id, level_id, label, category, x_coordinate, y_coordinate, notes, updated_at

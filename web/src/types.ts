@@ -13,6 +13,18 @@ export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   YARD: 'Yard',
 }
 
+// Fixed display order: bottom of the list = ground level, top = attic
+export const LEVEL_TYPE_ORDER: Record<LevelType, number> = {
+  ATTIC: 0,
+  FLOOR_3: 1,
+  FLOOR_2: 2,
+  FLOOR_1: 3,
+  GROUND: 4,
+  GARAGE: 5,
+  YARD: 6,
+  BASEMENT: 7,
+}
+
 export type MarkerCategory =
   | 'OUTLET' | 'SWITCH' | 'APPLIANCE' | 'FURNITURE' | 'SENSOR'
   | 'HVAC' | 'PLUMBING' | 'LIGHTING' | 'DOOR' | 'WINDOW'

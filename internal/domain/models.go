@@ -158,10 +158,6 @@ type UpdateRoomRequest struct {
 	YCoordinate float64 `json:"y_coordinate"`
 }
 
-type ReorderLevelRequest struct {
-	OrderIndex int `json:"order_index"`
-}
-
 // BreakerType describes the kind of breaker occupying a panel slot.
 type BreakerType string
 
