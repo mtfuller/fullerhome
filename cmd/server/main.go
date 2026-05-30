@@ -61,7 +61,6 @@ func main() {
 		r.Get("/levels", homeMap.ListLevels)
 		r.Post("/levels", homeMap.CreateLevel)
 		r.Put("/levels/{levelID}", homeMap.UpdateLevel)
-		r.Patch("/levels/{levelID}/reorder", homeMap.ReorderLevel)
 		r.Delete("/levels/{levelID}", homeMap.DeleteLevel)
 
 		r.Get("/levels/{levelID}/markers", homeMap.ListMarkers)
