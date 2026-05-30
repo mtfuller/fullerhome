@@ -67,6 +67,8 @@ func main() {
 		r.Post("/levels/{levelID}/markers", homeMap.CreateMarker)
 		r.Put("/levels/{levelID}/markers/{markerID}", homeMap.UpdateMarker)
 		r.Delete("/levels/{levelID}/markers/{markerID}", homeMap.DeleteMarker)
+		r.Get("/levels/{levelID}/markers/{markerID}/events", homeMap.ListMarkerEvents)
+		r.Post("/levels/{levelID}/markers/{markerID}/events", homeMap.CreateMarkerEvent)
 
 		r.Get("/levels/{levelID}/rooms", homeMap.ListRooms)
 		r.Post("/levels/{levelID}/rooms", homeMap.CreateRoom)

@@ -215,6 +215,34 @@ export interface ElectricalState {
   markers: AssetMarker[]
 }
 
+export type EventType = 'INSPECTED' | 'REPLACED' | 'SERVICED' | 'REPAIRED' | 'CLEANED' | 'NOTE'
+
+export const EVENT_TYPE_LABELS: Record<EventType, string> = {
+  INSPECTED: 'Inspected',
+  REPLACED: 'Replaced',
+  SERVICED: 'Serviced',
+  REPAIRED: 'Repaired',
+  CLEANED: 'Cleaned',
+  NOTE: 'Note',
+}
+
+export const EVENT_TYPE_COLOURS: Record<EventType, string> = {
+  INSPECTED: '#3c6255',
+  REPLACED:  '#dc2626',
+  SERVICED:  '#2563eb',
+  REPAIRED:  '#d97706',
+  CLEANED:   '#059669',
+  NOTE:      '#6b7280',
+}
+
+export interface MarkerEvent {
+  id: number
+  marker_id: string
+  event_type: EventType
+  note: string
+  created_at: string
+}
+
 export function parseWalls(json: string): WallSegment[] {
   try {
     const parsed = JSON.parse(json)

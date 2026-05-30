@@ -114,6 +114,15 @@ func Migrate(db *DB) error {
 	// Additive column migrations — tolerate "duplicate column" errors on re-run
 	_, _ = db.Exec(`ALTER TABLE spatial_levels ADD COLUMN map_config_json TEXT NOT NULL DEFAULT ''`)
 
+	// marker_events: timestamped maintenance log per asset marker
+	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS marker_events (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		marker_id  TEXT NOT NULL REFERENCES asset_markers(id) ON DELETE CASCADE,
+		event_type TEXT NOT NULL DEFAULT 'NOTE',
+		note       TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`)
+
 	return nil
 }
 
