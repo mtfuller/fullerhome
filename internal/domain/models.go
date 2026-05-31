@@ -260,3 +260,17 @@ type CreateMarkerEventRequest struct {
 	EventType EventType `json:"event_type"`
 	Note      string    `json:"note"`
 }
+
+// CircuitPeerGroup describes a circuit that a marker belongs to, plus all other markers on it.
+type CircuitPeerGroup struct {
+	CircuitID     uuid.UUID `json:"circuit_id"`
+	CircuitLabel  string    `json:"circuit_label"`
+	SlotNumber    int       `json:"slot_number"`
+	PanelMarkerID uuid.UUID `json:"panel_marker_id"`
+	PeerMarkerIDs []string  `json:"peer_marker_ids"`
+}
+
+// MarkerCircuitPeers is the response for GET /api/v1/markers/{markerID}/circuit-peers.
+type MarkerCircuitPeers struct {
+	Circuits []CircuitPeerGroup `json:"circuits"`
+}

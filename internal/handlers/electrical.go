@@ -316,6 +316,22 @@ func (h *ElectricalHandler) CreateConnection(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusCreated, conn)
 }
 
+// GetMarkerCircuitPeers handles GET /api/v1/markers/:markerID/circuit-peers.
+// Returns all circuits the marker belongs to and the other markers connected to each circuit.
+func (h *ElectricalHandler) GetMarkerCircuitPeers(w http.ResponseWriter, r *http.Request) {
+	markerID, err := uuid.Parse(chi.URLParam(r, "markerID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid markerID"})
+		return
+	}
+	result, err := h.queryMarkerCircuitPeers(r, markerID)
+	if err != nil {
+		h.internalError(w, "circuit peers", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 // DeleteConnection handles DELETE /api/v1/circuit-connections/:connectionID.
 func (h *ElectricalHandler) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 	connID, err := uuid.Parse(chi.URLParam(r, "connectionID"))
@@ -480,6 +496,57 @@ func (h *ElectricalHandler) queryConnectionByID(r *http.Request, id uuid.UUID) (
 	conn.MarkerCategory = domain.MarkerCategory(category)
 	conn.LevelID = uuid.MustParse(levelIDStr)
 	return conn, nil
+}
+
+func (h *ElectricalHandler) queryMarkerCircuitPeers(r *http.Request, markerID uuid.UUID) (domain.MarkerCircuitPeers, error) {
+	rows, err := h.db.QueryContext(r.Context(), `
+		SELECT c.id, c.label, c.slot_number, bp.marker_id, cc2.marker_id
+		FROM circuit_connections cc1
+		JOIN circuits c ON cc1.circuit_id = c.id
+		JOIN breaker_panels bp ON c.panel_id = bp.id
+		LEFT JOIN circuit_connections cc2 ON cc2.circuit_id = c.id AND cc2.marker_id != ?
+		WHERE cc1.marker_id = ?
+		ORDER BY c.slot_number, c.id, cc2.marker_id`,
+		markerID.String(), markerID.String())
+	if err != nil {
+		return domain.MarkerCircuitPeers{}, err
+	}
+	defer rows.Close()
+
+	type groupKey struct{ circuitID, panelMarkerID, label string; slot int }
+	order := []groupKey{}
+	groups := map[string]*domain.CircuitPeerGroup{}
+
+	for rows.Next() {
+		var circuitIDStr, circuitLabel, panelMarkerIDStr string
+		var slotNumber int
+		var peerMarkerID sql.NullString
+		if err := rows.Scan(&circuitIDStr, &circuitLabel, &slotNumber, &panelMarkerIDStr, &peerMarkerID); err != nil {
+			return domain.MarkerCircuitPeers{}, err
+		}
+		if _, seen := groups[circuitIDStr]; !seen {
+			order = append(order, groupKey{circuitIDStr, panelMarkerIDStr, circuitLabel, slotNumber})
+			groups[circuitIDStr] = &domain.CircuitPeerGroup{
+				CircuitID:     uuid.MustParse(circuitIDStr),
+				CircuitLabel:  circuitLabel,
+				SlotNumber:    slotNumber,
+				PanelMarkerID: uuid.MustParse(panelMarkerIDStr),
+				PeerMarkerIDs: []string{},
+			}
+		}
+		if peerMarkerID.Valid {
+			groups[circuitIDStr].PeerMarkerIDs = append(groups[circuitIDStr].PeerMarkerIDs, peerMarkerID.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return domain.MarkerCircuitPeers{}, err
+	}
+
+	result := domain.MarkerCircuitPeers{Circuits: make([]domain.CircuitPeerGroup, 0, len(order))}
+	for _, k := range order {
+		result.Circuits = append(result.Circuits, *groups[k.circuitID])
+	}
+	return result, nil
 }
 
 // queryConnectableMarkers returns all non-BREAKER markers for the connection picker.
