@@ -261,7 +261,7 @@ function App({ initialState }: { initialState: HomeMapState }) {
   // Grid unit
   const [gridUnit, setGridUnit] = useState<GridUnit>('none')
 
-  // Circuit overlay
+  // Circuit overlay (manual panel)
   const [showCircuitPanel, setShowCircuitPanel] = useState(false)
   const [circuitPanels, setCircuitPanels] = useState<BreakerPanel[]>([])
   const [circuitCircuits, setCircuitCircuits] = useState<Circuit[]>([])
@@ -269,6 +269,10 @@ function App({ initialState }: { initialState: HomeMapState }) {
   const [selectedOverlayPanelId, setSelectedOverlayPanelId] = useState<string | null>(null)
   const [selectedOverlayCircuitId, setSelectedOverlayCircuitId] = useState<string | null>(null)
   const [circuitPanelsLoading, setCircuitPanelsLoading] = useState(false)
+
+  // Auto circuit overlay (from selected marker)
+  interface MarkerCircuitPeers { peerIds: string[]; panelMarkerId: string; label: string }
+  const [markerCircuitPeers, setMarkerCircuitPeers] = useState<MarkerCircuitPeers | null>(null)
 
   // Search
   const [searchQuery, setSearchQuery] = useState('')
@@ -315,6 +319,25 @@ function App({ initialState }: { initialState: HomeMapState }) {
       .then(setCircuitConnections)
       .catch(console.error)
   }, [selectedOverlayCircuitId])
+
+  // Auto-highlight circuit peers when an electrical marker is selected
+  const selectedMarkerId = selection.kind === 'marker' ? (selection.markerId ?? null) : null
+  useEffect(() => {
+    if (!selectedMarkerId) { setMarkerCircuitPeers(null); return }
+    const marker = allMarkers.find(m => m.id === selectedMarkerId)
+    const electricalCats: MarkerCategory[] = ['OUTLET', 'SWITCH', 'APPLIANCE', 'LIGHTING', 'BREAKER']
+    if (!marker || !electricalCats.includes(marker.category)) { setMarkerCircuitPeers(null); return }
+    fetch(`/api/v1/markers/${selectedMarkerId}/circuit-peers`)
+      .then(r => r.json())
+      .then((data: { circuits: Array<{ circuit_id: string; circuit_label: string; slot_number: number; panel_marker_id: string; peer_marker_ids: string[] }> }) => {
+        if (!data.circuits || data.circuits.length === 0) { setMarkerCircuitPeers(null); return }
+        const peerIds = [...new Set(data.circuits.flatMap(c => c.peer_marker_ids ?? []))]
+        const panelMarkerId = data.circuits[0].panel_marker_id
+        const label = data.circuits.map(c => `${c.circuit_label} · Slot ${c.slot_number}`).join(', ')
+        setMarkerCircuitPeers({ peerIds, panelMarkerId, label })
+      })
+      .catch(() => setMarkerCircuitPeers(null))
+  }, [selectedMarkerId]) // eslint-disable-line
 
   // Save state
   const [saving, setSaving] = useState(false)
@@ -539,12 +562,18 @@ function App({ initialState }: { initialState: HomeMapState }) {
   const selectedRoom = selection.kind === 'room' ? allRooms.find(r => r.id === selection.roomId) ?? null : null
   const selectedZone = selection.kind === 'zone' ? allZones.find(z => z.id === selection.zoneId) ?? null : null
 
-  // Circuit overlay derived values
-  const circuitOverlayIds = useMemo(() => circuitConnections.map(c => c.marker_id), [circuitConnections])
+  // Circuit overlay derived values — manual panel takes priority over auto-highlight
+  const circuitOverlayIds = useMemo(() => {
+    if (showCircuitPanel) return circuitConnections.map(c => c.marker_id)
+    return markerCircuitPeers?.peerIds ?? []
+  }, [showCircuitPanel, circuitConnections, markerCircuitPeers])
   const circuitPanelMarkerId = useMemo(() => {
-    const panel = circuitPanels.find(p => p.id === selectedOverlayPanelId)
-    return panel?.marker_id ?? null
-  }, [circuitPanels, selectedOverlayPanelId])
+    if (showCircuitPanel) {
+      const panel = circuitPanels.find(p => p.id === selectedOverlayPanelId)
+      return panel?.marker_id ?? null
+    }
+    return markerCircuitPeers?.panelMarkerId ?? null
+  }, [showCircuitPanel, circuitPanels, selectedOverlayPanelId, markerCircuitPeers])
 
   // Search results
   interface SearchResult { kind: 'marker' | 'room' | 'zone'; id: string; label: string; levelId: string; levelName: string }
@@ -733,8 +762,8 @@ function App({ initialState }: { initialState: HomeMapState }) {
               selectedZoneType={selectedZoneType}
               mapConfig={activeLevelId ? (mapConfigs[activeLevelId] ?? null) : null}
               gridUnit={gridUnit}
-              circuitOverlayIds={showCircuitPanel ? circuitOverlayIds : undefined}
-              circuitPanelMarkerId={showCircuitPanel ? circuitPanelMarkerId : undefined}
+              circuitOverlayIds={circuitOverlayIds.length > 0 ? circuitOverlayIds : undefined}
+              circuitPanelMarkerId={circuitPanelMarkerId}
               onWallsChange={handleWallsChange}
               onMarkerPlace={handleMarkerPlace}
               onMarkerMove={handleMarkerMove}
@@ -985,6 +1014,8 @@ function App({ initialState }: { initialState: HomeMapState }) {
               <MarkerProps
                 marker={selectedMarker}
                 levelId={activeLevelId}
+                circuitLabel={markerCircuitPeers?.label ?? null}
+                circuitPeerCount={markerCircuitPeers?.peerIds.length ?? 0}
                 onUpdate={async (label, category, notes) => {
                   const updated = await api.updateMarker(activeLevelId, selectedMarker.id, label, category, selectedMarker.x_coordinate, selectedMarker.y_coordinate, notes)
                   setAllMarkers(ms => ms.map(m => m.id === updated.id ? updated : m))
@@ -1145,9 +1176,11 @@ function VertexProps({ wallId, pointIndex, walls, onWallsChange }: {
   )
 }
 
-function MarkerProps({ marker, levelId, onUpdate, onDelete }: {
+function MarkerProps({ marker, levelId, circuitLabel, circuitPeerCount, onUpdate, onDelete }: {
   marker: AssetMarker
   levelId: string
+  circuitLabel: string | null
+  circuitPeerCount: number
   onUpdate: (label: string, category: string, notes: string) => void
   onDelete: () => void
 }) {
@@ -1208,6 +1241,22 @@ function MarkerProps({ marker, levelId, onUpdate, onDelete }: {
         <button onClick={() => onUpdate(label, category, notes)} style={btnStyle('primary')}>Save</button>
         <button onClick={onDelete} style={btnStyle('danger')}>Delete</button>
       </div>
+
+      {/* Circuit membership */}
+      {circuitLabel && (
+        <div style={{ marginTop: 10, padding: '6px 8px', background: '#fffbeb', border: '1px solid #f59e0b', borderRadius: 5 }}>
+          <div style={{ fontSize: 10, color: '#92400e', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>Circuit</div>
+          <div style={{ fontSize: 11, color: '#78350f', fontWeight: 500 }}>{circuitLabel}</div>
+          {circuitPeerCount > 0 && (
+            <div style={{ fontSize: 10, color: '#92400e', marginTop: 2 }}>
+              {circuitPeerCount} other outlet{circuitPeerCount !== 1 ? 's' : ''}/switch{circuitPeerCount !== 1 ? 'es' : ''} highlighted
+            </div>
+          )}
+          {circuitPeerCount === 0 && (
+            <div style={{ fontSize: 10, color: '#92400e', marginTop: 2 }}>No other connections on this circuit</div>
+          )}
+        </div>
+      )}
 
       {/* Maintenance log */}
       <div style={{ marginTop: 14, borderTop: `1px solid ${PALETTE.border}`, paddingTop: 10 }}>

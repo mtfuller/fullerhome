@@ -70,6 +70,8 @@ func main() {
 		r.Get("/levels/{levelID}/markers/{markerID}/events", homeMap.ListMarkerEvents)
 		r.Post("/levels/{levelID}/markers/{markerID}/events", homeMap.CreateMarkerEvent)
 
+		r.Get("/markers/{markerID}/circuit-peers", electrical.GetMarkerCircuitPeers)
+
 		r.Get("/levels/{levelID}/rooms", homeMap.ListRooms)
 		r.Post("/levels/{levelID}/rooms", homeMap.CreateRoom)
 		r.Put("/levels/{levelID}/rooms/{roomID}", homeMap.UpdateRoom)
